@@ -13,6 +13,8 @@ jobs:
   release-build:
     name: Release Build (macos-latest)
     runs-on: macos-latest
+    permissions:
+      contents: read
     env:
       DEVELOPER_DIR: "/Applications/Xcode_26.0.app"
       SWIFT_VERSION: 6.2.3
@@ -23,11 +25,11 @@ jobs:
           xcodebuild -version
       - name: Show Swift version
         run: swift --version
-      - name: Check out code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
           fetch-tags: true
+          persist-credentials: false
       - name: Install jemalloc
         run: brew install jemalloc
       - name: Lint
@@ -41,16 +43,17 @@ jobs:
     name: Release Notes
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
+      contents: write # Needed to create/update GH release.
     steps:
       - name: Set TAG_NAME in Environment
         # Subsequent jobs will be have the computed tag name
         run: echo "TAG_NAME=${GITHUB_REF##*/}" >> $GITHUB_ENV
       - name: Check out code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
           fetch-tags: true
+          persist-credentials: false
       - name: Create or Update Release
         env:
           # Required for the GitHub CLI
