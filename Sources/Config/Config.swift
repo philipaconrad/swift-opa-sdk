@@ -10,7 +10,7 @@ extension OPA {
         public let labels: [String: String]
         public let discovery: DiscoveryConfig?
         public let bundles: [String: BundleSourceConfig]
-        // public let decisionLogs: DecisionLogsConfig?
+        public let decisionLogs: DecisionLogsConfig?
         // public let status: StatusConfig?
         // public let plugins: [String: PluginConfig]
         public let keys: [String: KeyConfig]
@@ -29,7 +29,7 @@ extension OPA {
             labels: [String: String] = [:],
             discovery: DiscoveryConfig? = nil,
             bundles: [String: BundleSourceConfig] = [:],
-            // decisionLogs: DecisionLogsConfig? = nil,
+            decisionLogs: DecisionLogsConfig? = nil,
             // status: StatusConfig? = nil,
             // plugins: [String: PluginConfig] = [:],
             keys: [String: KeyConfig] = [:]
@@ -47,7 +47,7 @@ extension OPA {
             self.labels = labels
             let discovery = discovery
             let bundles = bundles
-            // self.decisionLogs = decisionLogs
+            self.decisionLogs = decisionLogs
             // self.status = status
             // self.plugins = plugins
             let keys = keys
@@ -97,7 +97,7 @@ extension OPA {
             self.labels = try container.decodeIfPresent([String: String].self, forKey: .labels) ?? [:]
             let discovery = try container.decodeIfPresent(DiscoveryConfig.self, forKey: .discovery)
             let bundles = try container.decodeIfPresent([String: BundleSourceConfig].self, forKey: .bundles) ?? [:]
-            // self.decisionLogs = try container.decodeIfPresent(DecisionLogsConfig.self, forKey: .decisionLogs)
+            self.decisionLogs = try container.decodeIfPresent(DecisionLogsConfig.self, forKey: .decisionLogs)
             // self.status = try container.decodeIfPresent(StatusConfig.self, forKey: .status)
             // self.plugins = try container.decodeIfPresent([String: PluginConfig].self, forKey: .plugins) ?? [:]
             let keys = try container.decodeIfPresent([String: KeyConfig].self, forKey: .keys) ?? [:]
@@ -130,7 +130,7 @@ extension OPA {
             try container.encodeIfPresent(labels.isEmpty ? nil : labels, forKey: .labels)
             try container.encodeIfPresent(discovery, forKey: .discovery)
             try container.encodeIfPresent(bundles.isEmpty ? nil : bundles, forKey: .bundles)
-            // try container.encodeIfPresent(decisionLogs, forKey: .decisionLogs)
+            try container.encodeIfPresent(decisionLogs, forKey: .decisionLogs)
             // try container.encodeIfPresent(status, forKey: .status)
             // try container.encodeIfPresent(plugins.isEmpty ? nil : plugins, forKey: .plugins)
             try container.encodeIfPresent(keys, forKey: .keys)
