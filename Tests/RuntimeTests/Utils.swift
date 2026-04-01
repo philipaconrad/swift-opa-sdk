@@ -1,9 +1,7 @@
 import AST
 import Foundation
-import NIOCore
-import NIOHTTP1
-import NIOPosix
 import Rego
+import Runtime
 
 public func makeTempDir() throws -> URL {
     let tempDir = FileManager.default.temporaryDirectory
@@ -65,86 +63,106 @@ public func makeExampleBundle(
     return try OPA.Bundle(manifest: manifest, planFiles: planFiles, regoFiles: regoFiles, data: data)
 }
 
-// MARK: - Test HTTP Server
-
-/// A minimal HTTP server for testing HTTP-based bundle downloads.
-/// Analogous to Go's `httptest.NewServer` — binds to 127.0.0.1 on an
-/// OS-assigned port and serves canned responses keyed by request URI.
-final class TestBundleServer: @unchecked Sendable {
-    let port: Int
-    let baseURL: String
-    private let channel: Channel
-    private let group: EventLoopGroup
-
-    private init(channel: Channel, group: EventLoopGroup) {
-        self.channel = channel
-        self.group = group
-        self.port = channel.localAddress!.port!
-        self.baseURL = "http://127.0.0.1:\(self.port)"
-    }
-
-    /// Start a test server that maps request URI paths to response data.
-    /// Any path not in `files` receives a 404.
-    static func start(files: [String: Data]) async throws -> TestBundleServer {
-        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
-        let bootstrap = ServerBootstrap(group: group)
-            .serverChannelOption(.backlog, value: 16)
-            .childChannelInitializer { channel in
-                channel.pipeline.configureHTTPServerPipeline().flatMap {
-                    channel.pipeline.addHandler(Handler(files: files))
-                }
-            }
-            .childChannelOption(.socketOption(.so_reuseaddr), value: 1)
-
-        let channel = try await bootstrap.bind(host: "127.0.0.1", port: 0).get()
-        return TestBundleServer(channel: channel, group: group)
-    }
-
-    func shutdown() async throws {
-        try await channel.close()
-        try await group.shutdownGracefully()
-    }
-
-    // MARK: - NIO Handler
-
-    private final class Handler: ChannelInboundHandler, RemovableChannelHandler, @unchecked Sendable {
-        typealias InboundIn = HTTPServerRequestPart
-        typealias OutboundOut = HTTPServerResponsePart
-
-        let files: [String: Data]
-        private var requestURI: String = ""
-
-        init(files: [String: Data]) {
-            self.files = files
+/// Polls until the named bundle appears in the runtime's storage, or the timeout expires.
+public func waitForBundleLoad(
+    rt: OPA.Runtime,
+    name: String,
+    timeout: Duration = .seconds(30),
+    pollInterval: Duration = .milliseconds(100)
+) async -> Result<OPA.Bundle, any Swift.Error> {
+    let deadline = ContinuousClock.now + timeout
+    while ContinuousClock.now < deadline {
+        if let result = await rt.bundleStorage[name] {
+            return result
         }
-
-        func channelRead(context: ChannelHandlerContext, data: NIOAny) {
-            let part = unwrapInboundIn(data)
-            switch part {
-            case .head(let head):
-                requestURI = head.uri
-            case .body:
-                break
-            case .end:
-                let (status, body): (HTTPResponseStatus, Data) =
-                    if let fileData = files[requestURI] {
-                        (.ok, fileData)
-                    } else {
-                        (.notFound, Data("not found".utf8))
-                    }
-
-                var headers = HTTPHeaders()
-                headers.add(name: "content-length", value: "\(body.count)")
-                headers.add(name: "content-type", value: "application/octet-stream")
-
-                let responseHead = HTTPResponseHead(version: .http1_1, status: status, headers: headers)
-                context.write(wrapOutboundOut(.head(responseHead)), promise: nil)
-
-                var buffer = context.channel.allocator.buffer(capacity: body.count)
-                buffer.writeBytes(body)
-                context.write(wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
-                context.writeAndFlush(wrapOutboundOut(.end(nil)), promise: nil)
-            }
-        }
+        try? await Task.sleep(for: pollInterval)
     }
+    return .failure(CancellationError())
+}
+
+/// Build an OPA config JSON pointing at the given ETag test server.
+public func makeETagTestConfig(
+    baseURL: String, bundleName: String = "test", resourcePath: String = "/bundles/test.tar.gz"
+) -> String {
+    """
+    {
+      "services": {
+        "test-svc": {"url": "\(baseURL)"}
+      },
+      "bundles": {
+        "\(bundleName)": {
+          "service": "test-svc",
+          "resource": "\(resourcePath)"
+        }
+      }
+    }
+    """
+}
+
+/// Build a config with short polling intervals for runtime integration tests.
+public func makeETagTestConfigWithPolling(
+    baseURL: String, bundleName: String = "test", resourcePath: String = "/bundles/test.tar.gz"
+) -> String {
+    """
+    {
+      "services": {
+        "test-svc": {"url": "\(baseURL)"}
+      },
+      "bundles": {
+        "\(bundleName)": {
+          "service": "test-svc",
+          "resource": "\(resourcePath)",
+          "polling": {
+            "min_delay_seconds": 1,
+            "max_delay_seconds": 1
+          }
+        }
+      }
+    }
+    """
+}
+
+/// Build a config with long-polling enabled for loader-level tests.
+public func makeETagTestConfigWithLongPolling(
+    baseURL: String,
+    bundleName: String = "test",
+    resourcePath: String = "/bundles/test.tar.gz",
+    minDelaySeconds: Int = 1,
+    maxDelaySeconds: Int = 1,
+    longPollingTimeoutSeconds: Int = 30
+) -> String {
+    """
+    {
+      "services": {
+        "test-svc": {"url": "\(baseURL)"}
+      },
+      "bundles": {
+        "\(bundleName)": {
+          "service": "test-svc",
+          "resource": "\(resourcePath)",
+          "polling": {
+            "min_delay_seconds": \(minDelaySeconds),
+            "max_delay_seconds": \(maxDelaySeconds),
+            "long_polling_timeout_seconds": \(longPollingTimeoutSeconds)
+          }
+        }
+      }
+    }
+    """
+}
+
+/// Construct a `RESTClientBundleLoader` from a config JSON string.
+public func makeRESTClientBundleLoader(
+    configJSON: String,
+    bundleName: String = "test",
+    etag: String? = nil
+) throws -> OPA.RESTClientBundleLoader {
+    let config = try JSONDecoder().decode(OPA.Config.self, from: configJSON.data(using: .utf8)!)
+    return try OPA.RESTClientBundleLoader(
+        config: config,
+        bundleResourceName: bundleName,
+        etag: etag,
+        headers: nil,
+        httpClient: nil
+    )
 }
