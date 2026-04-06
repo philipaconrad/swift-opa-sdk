@@ -168,7 +168,7 @@ extension OPA {
         /// in separate top-level config sections and aren't available at decode
         /// time. The parent config calls this method during its resolution phase
         /// to produce a fully-populated instance.
-        public func resolved(withKeys keys: [String: KeyConfig]) throws -> BundleSourceConfig {
+        public func resolved(withKeys keys: [String: KeyConfig], name: String) throws -> BundleSourceConfig {
             var resolvedSigning = try self.signing?.resolved(withKeys: keys)
             if !keys.isEmpty && resolvedSigning == nil {
                 resolvedSigning = BundleVerificationConfig(publicKeys: keys, keyID: "", scope: "", exclude: [])
@@ -177,7 +177,7 @@ extension OPA {
             return try BundleSourceConfig(
                 downloaderConfig: downloaderConfig,
                 service: service,
-                resource: resource,
+                resource: resource ?? "/bundle/\(name)",
                 signing: resolvedSigning,
                 persist: persist,
                 sizeLimitBytes: sizeLimitBytes

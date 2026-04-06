@@ -6,8 +6,8 @@ import Testing
 
 // MARK: - Disk-based Bundle Loading Tests
 
-@Suite("BundleTests")
-struct BundleTests {
+@Suite("DiskBasedBundleTests")
+struct DiskBasedBundleTests {
     struct TestCase: Sendable {
         let description: String
         let config: String
@@ -42,6 +42,6 @@ struct BundleTests {
     }
 }
 
-extension BundleTests.TestCase: CustomTestStringConvertible {
+extension DiskBasedBundleTests.TestCase: CustomTestStringConvertible {
     var testDescription: String { description }
 }

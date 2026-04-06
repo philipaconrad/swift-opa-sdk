@@ -63,7 +63,9 @@ extension OPA {
 
             // Some nested structures require cross-config context, so we resolve those parts out here.
             self.discovery = try discovery?.resolved(withKeys: keys)
-            self.bundles = try bundles.mapValues({ try $0.resolved(withKeys: keys) })
+            self.bundles = Dictionary(
+                uniqueKeysWithValues: try bundles.map({ try ($0.key, $0.value.resolved(withKeys: keys, name: $0.key)) })
+            )
             self.keys = keys
 
             try self.validate()
@@ -111,7 +113,9 @@ extension OPA {
 
             // Some nested structures require cross-config context, so we resolve those parts out here.
             self.discovery = try discovery?.resolved(withKeys: keys)
-            self.bundles = try bundles.mapValues({ try $0.resolved(withKeys: keys) })
+            self.bundles = Dictionary(
+                uniqueKeysWithValues: try bundles.map({ try ($0.key, $0.value.resolved(withKeys: keys, name: $0.key)) })
+            )
             self.keys = keys
 
             try self.validate()

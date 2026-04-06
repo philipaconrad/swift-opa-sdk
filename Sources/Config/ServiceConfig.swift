@@ -46,7 +46,7 @@ extension OPA {
             self.allowInsecureTLS = allowInsecureTLS
             self.responseHeaderTimeoutSeconds = responseHeaderTimeoutSeconds
             self.tls = tls
-            let credentials = credentials
+            let credentials = credentials ?? .defaultNoAuth
             self.type = type
 
             if case .bearer(let plugin) = credentials {
@@ -67,7 +67,7 @@ extension OPA {
             self.responseHeaderTimeoutSeconds = try container.decodeIfPresent(
                 Int64.self, forKey: .responseHeaderTimeoutSeconds)
             self.tls = try container.decodeIfPresent(ServerTLSConfig.self, forKey: .tls)
-            let credentials = try container.decodeIfPresent(Credentials.self, forKey: .credentials)
+            let credentials = try container.decodeIfPresent(Credentials.self, forKey: .credentials) ?? .defaultNoAuth
             self.type = try container.decodeIfPresent(String.self, forKey: .type)
 
             if case .bearer(let plugin) = credentials {
@@ -88,6 +88,7 @@ extension OPA {
         /// config keys in this section-- any configuration will appear under the
         /// `plugins` section.
         public enum Credentials: Codable, Sendable, Equatable {
+            case defaultNoAuth
             case bearer(BearerAuthPlugin)
             case oauth2([String: AnyCodable])
             case clientTLS(ClientTLSAuthPlugin)
@@ -136,18 +137,17 @@ extension OPA {
 
                     let foundCredentials = attemptedCredentialTypes.compactMap { $0 }
 
-                    guard foundCredentials.count == 1 else {
+                    guard foundCredentials.count <= 1 else {
                         throw DecodingError.dataCorrupted(
                             DecodingError.Context(
                                 codingPath: container.codingPath,
-                                debugDescription: foundCredentials.isEmpty
-                                    ? "No valid credential type found"
-                                    : "Expected exactly one credential type, but found \(foundCredentials.count)"
+                                debugDescription:
+                                    "Expected at most one credential type, but found \(foundCredentials.count)"
                             )
                         )
                     }
 
-                    self = foundCredentials[0]
+                    self = foundCredentials.first ?? .defaultNoAuth
                 }
             }
 
@@ -155,6 +155,8 @@ extension OPA {
                 var container = encoder.container(keyedBy: CodingKeys.self)
 
                 switch self {
+                case .defaultNoAuth:
+                    break
                 case .bearer(let plugin):
                     try container.encode(plugin, forKey: .bearer)
                 case .oauth2(let config):
@@ -175,6 +177,16 @@ extension OPA {
 
         // Validates struct-local constraints.
         public func validate() throws {
+            // Ensure URL is a valid HTTP/HTTPS URL.
+            guard let scheme = self.url.scheme?.lowercased(),
+                scheme == "http" || scheme == "https",
+                self.url.host != nil
+            else {
+                throw OPA.ConfigError(
+                    code: .internalError, message: "Expected a valid http/https URL, got: \(self.url)")
+            }
+
+            // For credentials types that need extra context, we validate those here.
             switch self.credentials {
             case .clientTLS(let plugin):
                 try plugin.validateWithContext(serviceTLS: self.tls)

@@ -31,7 +31,7 @@ extension OPA {
             return (URL(string: resource.resource ?? "")?.scheme == "file")
         }
 
-        public func load() -> Result<Bundle, any Swift.Error> {
+        public func load() async -> Result<Bundle, any Swift.Error> {
             var isDirectory: ObjCBool = false
             if FileManager.default.fileExists(atPath: self.fetchURL.path, isDirectory: &isDirectory) {
                 if isDirectory.boolValue {

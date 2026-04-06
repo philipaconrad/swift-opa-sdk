@@ -38,7 +38,7 @@ extension OPA {
         /// The logger to use for events within the Runtime.
         // private let logger: Logger
 
-        public let restClient: HTTPClient?
+        public let httpClient: HTTPClient?
 
         public var bundleStorage: [String: Result<OPA.Bundle, any Swift.Error>]
 
@@ -62,10 +62,11 @@ extension OPA {
         public init(
             config: OPA.Config, instanceID: String = UUID().uuidString, httpClient: HTTPClient? = nil,
             bundles: [String: OPA.Bundle]? = nil
-        ) {
+        ) async {
             self.config = config
             self.instanceID = instanceID
             self.preparedQueries = [:]
+            self.httpClient = httpClient ?? HTTPClient.shared
 
             self.bundleStorage = [String: Result<OPA.Bundle, any Swift.Error>](
                 minimumCapacity: (bundles?.count ?? 0) + config.bundles.count)
@@ -75,14 +76,14 @@ extension OPA {
                     do {
                         let bundleLoader = try DiskBasedBundleLoader(
                             services: self.config.services, name: name, resource: bundleSourceConfig)
-                        self.bundleStorage[name] = bundleLoader.load()
+                        self.bundleStorage[name] = await bundleLoader.load()
                     } catch {
                         self.bundleStorage[name] = .failure(error)
                     }
                 } else if RESTClientBundleLoader.compatibleWithConfig(
                     services: self.config.services, resource: bundleSourceConfig)
                 {
-                    guard let httpClient = httpClient else {
+                    guard let httpClient = self.httpClient else {
                         self.bundleStorage[name] = .failure(
                             RuntimeError.init(
                                 code: .internalError, message: "No HTTP client available for fetching bundle \(name)"))
@@ -93,16 +94,15 @@ extension OPA {
                         let bundleLoader = try RESTClientBundleLoader(
                             services: self.config.services, name: name, resource: bundleSourceConfig,
                             httpClient: httpClient)
-                        self.bundleStorage[name] = bundleLoader.load()
+                        self.bundleStorage[name] = await bundleLoader.load()
                     } catch {
                         self.bundleStorage[name] = .failure(error)
                     }
                 } else {
                     self.bundleStorage[name] = .failure(
-                        .failure(
-                            RuntimeError.init(
-                                code: .internalError,
-                                message: "Unsupported bundle source for bundle \(name)")))
+                        RuntimeError.init(
+                            code: .internalError,
+                            message: "Unsupported bundle source for bundle \(name)"))
                 }
             }
 

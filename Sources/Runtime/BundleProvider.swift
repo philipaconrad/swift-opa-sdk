@@ -7,6 +7,6 @@ extension OPA {
     /// It is expected that implementations each have to be created
     /// from an OPA config's service / resource definitions.
     public protocol BundleLoader {
-        func load() -> Result<Bundle, any Swift.Error>
+        func load() async -> Result<Bundle, any Swift.Error>
     }
 }
