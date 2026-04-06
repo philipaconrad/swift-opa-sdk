@@ -13,7 +13,7 @@ extension OPA {
         // public let decisionLogs: DecisionLogsConfig?
         // public let status: StatusConfig?
         // public let plugins: [String: PluginConfig]
-        // public let keys: KeysConfig?
+        public let keys: [String: KeyConfig]
         // public let defaultDecision: String?
         // public let defaultAuthorizationDecision: String?
         // public let caching: CachingConfig?
@@ -28,11 +28,11 @@ extension OPA {
             services: [String: ServiceConfig] = [:],
             labels: [String: String] = [:],
             discovery: DiscoveryConfig? = nil,
-            bundles: [String: BundleSourceConfig] = [:]
-                // decisionLogs: DecisionLogsConfig? = nil,
-                // status: StatusConfig? = nil,
-                // plugins: [String: PluginConfig] = [:],
-                // keys: KeysConfig? = nil,
+            bundles: [String: BundleSourceConfig] = [:],
+            // decisionLogs: DecisionLogsConfig? = nil,
+            // status: StatusConfig? = nil,
+            // plugins: [String: PluginConfig] = [:],
+            keys: [String: KeyConfig] = [:]
                 // defaultDecision: String? = nil,
                 // defaultAuthorizationDecision: String? = nil,
                 // caching: CachingConfig? = nil,
@@ -42,15 +42,15 @@ extension OPA {
                 // server: ServerConfig? = nil,
                 // storage: StorageConfig? = nil,
                 // extra: [String: AnyCodable]? = nil
-        ) {
+        ) throws {
             self.services = services
             self.labels = labels
-            self.discovery = discovery
-            self.bundles = bundles
+            let discovery = discovery
+            let bundles = bundles
             // self.decisionLogs = decisionLogs
             // self.status = status
             // self.plugins = plugins
-            // self.keys = keys
+            let keys = keys
             // self.defaultDecision = defaultDecision
             // self.defaultAuthorizationDecision = defaultAuthorizationDecision
             // self.caching = caching
@@ -60,6 +60,13 @@ extension OPA {
             // self.server = server
             // self.storage = storage
             // self.extra = extra
+
+            // Some nested structures require cross-config context, so we resolve those parts out here.
+            self.discovery = try discovery?.resolved(withKeys: keys)
+            self.bundles = try bundles.mapValues({ try $0.resolved(withKeys: keys) })
+            self.keys = keys
+
+            try self.validate()
         }
 
         // MARK: - Decoder
@@ -67,14 +74,31 @@ extension OPA {
         public init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
 
-            self.services = try container.decodeIfPresent([String: ServiceConfig].self, forKey: .services) ?? [:]
+            // Services can be provided as a dictionary or an array with the name fields set.
+            do {
+                let services = try container.decodeIfPresent([String: ServiceConfig].self, forKey: .services) ?? [:]
+                self.services = services
+            } catch {
+                let servicesArray = try container.decodeIfPresent([ServiceConfig].self, forKey: .services) ?? []
+                var services = [String: ServiceConfig]()
+                for (idx, service) in servicesArray.enumerated() {
+                    guard let name = service.name else {
+                        throw OPA.ConfigError(
+                            code: .internalError,
+                            message: "Missing \"name\" key for service at index \(idx) in services array")
+                    }
+                    services[name] = service
+                }
+                self.services = services
+            }
+
             self.labels = try container.decodeIfPresent([String: String].self, forKey: .labels) ?? [:]
-            self.discovery = try container.decodeIfPresent(DiscoveryConfig.self, forKey: .discovery)
-            self.bundles = try container.decodeIfPresent([String: BundleSourceConfig].self, forKey: .bundles) ?? [:]
+            let discovery = try container.decodeIfPresent(DiscoveryConfig.self, forKey: .discovery)
+            let bundles = try container.decodeIfPresent([String: BundleSourceConfig].self, forKey: .bundles) ?? [:]
             // self.decisionLogs = try container.decodeIfPresent(DecisionLogsConfig.self, forKey: .decisionLogs)
             // self.status = try container.decodeIfPresent(StatusConfig.self, forKey: .status)
             // self.plugins = try container.decodeIfPresent([String: PluginConfig].self, forKey: .plugins) ?? [:]
-            // self.keys = try container.decodeIfPresent(KeysConfig.self, forKey: .keys)
+            let keys = try container.decodeIfPresent([String: KeyConfig].self, forKey: .keys) ?? [:]
             // self.defaultDecision = try container.decodeIfPresent(String.self, forKey: .defaultDecision)
             // self.defaultAuthorizationDecision = try container.decodeIfPresent(String.self, forKey: .defaultAuthorizationDecision)
             // self.caching = try container.decodeIfPresent(CachingConfig.self, forKey: .caching)
@@ -85,33 +109,12 @@ extension OPA {
             // self.storage = try container.decodeIfPresent(StorageConfig.self, forKey: .storage)
             // self.extra = nil  // Extra is not decoded from JSON (matches Go's `json:"-"`)
 
-            // Validation for decoded config.
-            for (name, bundle) in self.bundles {
-                // Prevent bundle referencing a non-existent service.
-                guard bundle.service.isEmpty || self.services[bundle.service] != nil else {
-                    throw DecodingError.dataCorrupted(
-                        DecodingError.Context(
-                            codingPath: container.codingPath + [
-                                CodingKeys.bundles, DynamicCodingKey(stringValue: name),
-                            ],
-                            debugDescription:
-                                "Bundle config for '\(name)' references non-existent service: '\(bundle.service)'"
-                        )
-                    )
-                }
-                // If no service specified, require a file:// URL to load from disk.
-                guard !bundle.service.isEmpty || (URL(string: bundle.resource ?? "")?.scheme == "file") else {
-                    throw DecodingError.dataCorrupted(
-                        DecodingError.Context(
-                            codingPath: container.codingPath + [
-                                CodingKeys.bundles, DynamicCodingKey(stringValue: name),
-                            ],
-                            debugDescription:
-                                "Bundle config for '\(name)' has no service config or file:// URL resource config. \(bundle.resource ?? "(nil)")"
-                        )
-                    )
-                }
-            }
+            // Some nested structures require cross-config context, so we resolve those parts out here.
+            self.discovery = try discovery?.resolved(withKeys: keys)
+            self.bundles = try bundles.mapValues({ try $0.resolved(withKeys: keys) })
+            self.keys = keys
+
+            try self.validate()
         }
 
         // MARK: - Encoder
@@ -126,7 +129,7 @@ extension OPA {
             // try container.encodeIfPresent(decisionLogs, forKey: .decisionLogs)
             // try container.encodeIfPresent(status, forKey: .status)
             // try container.encodeIfPresent(plugins.isEmpty ? nil : plugins, forKey: .plugins)
-            // try container.encodeIfPresent(keys, forKey: .keys)
+            try container.encodeIfPresent(keys, forKey: .keys)
             // try container.encodeIfPresent(defaultDecision, forKey: .defaultDecision)
             // try container.encodeIfPresent(defaultAuthorizationDecision, forKey: .defaultAuthorizationDecision)
             // try container.encodeIfPresent(caching, forKey: .caching)
@@ -136,6 +139,16 @@ extension OPA {
             // try container.encodeIfPresent(server, forKey: .server)
             // try container.encodeIfPresent(storage, forKey: .storage)
             // Extra is not encoded to JSON (matches Go's `json:"-"`)
+        }
+
+        public func validate() throws {
+            for (name, bundleConfig) in self.bundles {
+                try bundleConfig.validateWithContext(name: name, services: self.services, keys: self.keys)
+            }
+
+            for (id, keyConfig) in self.keys {
+                try keyConfig.validateWithContext(id: id)
+            }
         }
 
         private enum CodingKeys: String, CodingKey {

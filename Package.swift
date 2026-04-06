@@ -56,6 +56,10 @@ let package = Package(
             dependencies: ["SwiftOPASDK"]
         ),
         .testTarget(
+            name: "ConfigTests",
+            dependencies: ["Config"]
+        ),
+        .testTarget(
             name: "RegoExtensionTests",
             dependencies: ["SwiftOPASDK"]
         ),
