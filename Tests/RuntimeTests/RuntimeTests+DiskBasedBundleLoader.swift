@@ -102,7 +102,7 @@ struct RuntimeDiskBasedBundleTests {
         // Build an updated OPA Config, then start up the runtime.
         let updatedConfig: Data = tc.config.replacingOccurrences(of: "{TEMP}", with: tempDir.path()).data(using: .utf8)!
         let config: OPA.Config = try JSONDecoder().decode(OPA.Config.self, from: updatedConfig)
-        var rt = OPA.Runtime(config: config, bundles: [:])
+        var rt = await OPA.Runtime(config: config, bundles: [:])
 
         // Prepare query.
         try await rt.prepare(queries: ["data/foo/hello"])
@@ -240,8 +240,8 @@ struct RuntimeDiskBasedBundleTests {
         case .bundleInit:
             let config = try JSONDecoder().decode(OPA.Config.self, from: configString.data(using: .utf8)!)
             // Runtime init or bundle loader construction should throw
-            #expect(throws: RuntimeError.self) {
-                let rt = OPA.Runtime(config: config, bundles: [:])
+            await #expect(throws: RuntimeError.self) {
+                let rt = await OPA.Runtime(config: config, bundles: [:])
                 for (_, bundleResult) in rt.bundleStorage {
                     let _ = try bundleResult.get()
                 }

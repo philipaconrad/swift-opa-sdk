@@ -16,6 +16,8 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/open-policy-agent/swift-opa", branch: "main"),
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.81.0"),
+        .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.30.0"),
         .package(url: "https://github.com/swift-server/async-http-client", from: "1.21.0"),
         // TODO: Swap for whatever our solution ends up being. This is not the most recent commit,
         // but it is the last one that supports macOS 13 as a target.
@@ -65,7 +67,12 @@ let package = Package(
         ),
         .testTarget(
             name: "RuntimeTests",
-            dependencies: ["Runtime"]
+            dependencies: [
+                "Runtime",
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
+                .product(name: "NIOHTTP1", package: "swift-nio"),
+            ]
         ),
     ]
 )
