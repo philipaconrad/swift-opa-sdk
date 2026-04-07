@@ -113,41 +113,53 @@ extension OPA {
                 // Check if plugin field is present.
                 if let pluginName = try container.decodeIfPresent(String.self, forKey: .custom) {
                     self = .custom(pluginName)
-                } else {
-                    // Fall back to trying each credential type.
-                    let attemptedCredentialTypes: [Credentials?] = [
-                        try? container.decodeIfPresent(BearerAuthPlugin.self, forKey: .bearer).map { .bearer($0) },
-                        try? container.decodeIfPresent([String: AnyCodable].self, forKey: .oauth2).map { .oauth2($0) },
-                        try? container.decodeIfPresent(ClientTLSAuthPlugin.self, forKey: .clientTLS).map {
-                            .clientTLS($0)
-                        },
-                        try? container.decodeIfPresent([String: AnyCodable].self, forKey: .s3Signing).map {
-                            .s3Signing($0)
-                        },
-                        try? container.decodeIfPresent(GCPMetadataAuthPlugin.self, forKey: .gcpMetadata).map {
-                            .gcpMetadata($0)
-                        },
-                        try? container.decodeIfPresent(
-                            AzureManagedIdentitiesAuthPlugin.self, forKey: .azureManagedIdentity
+                    return
+                }
+
+                // Determine which credential keys are actually present in the payload.
+                let credentialKeys: [CodingKeys] = [
+                    .bearer, .oauth2, .clientTLS, .s3Signing, .gcpMetadata, .azureManagedIdentity,
+                ]
+                let presentKeys = credentialKeys.filter { container.contains($0) }
+
+                guard presentKeys.count <= 1 else {
+                    throw DecodingError.dataCorrupted(
+                        DecodingError.Context(
+                            codingPath: container.codingPath,
+                            debugDescription:
+                                "Expected at most one credential type, but found \(presentKeys.count)"
                         )
-                        .map {
-                            .azureManagedIdentity($0)
-                        },
-                    ]
+                    )
+                }
 
-                    let foundCredentials = attemptedCredentialTypes.compactMap { $0 }
+                // No credential keys present (e.g. empty `{}`): default to no auth.
+                guard let key = presentKeys.first else {
+                    self = .defaultNoAuth
+                    return
+                }
 
-                    guard foundCredentials.count == 1 else {
-                        throw DecodingError.dataCorrupted(
-                            DecodingError.Context(
-                                codingPath: container.codingPath,
-                                debugDescription:
-                                    "Expected at most one credential type, but found \(foundCredentials.count)"
-                            )
+                // Exactly one key present — decode it strictly so misconfigurations propagate.
+                switch key {
+                case .bearer:
+                    self = .bearer(try container.decode(BearerAuthPlugin.self, forKey: .bearer))
+                case .oauth2:
+                    self = .oauth2(try container.decode([String: AnyCodable].self, forKey: .oauth2))
+                case .clientTLS:
+                    self = .clientTLS(try container.decode(ClientTLSAuthPlugin.self, forKey: .clientTLS))
+                case .s3Signing:
+                    self = .s3Signing(try container.decode([String: AnyCodable].self, forKey: .s3Signing))
+                case .gcpMetadata:
+                    self = .gcpMetadata(try container.decode(GCPMetadataAuthPlugin.self, forKey: .gcpMetadata))
+                case .azureManagedIdentity:
+                    self = .azureManagedIdentity(
+                        try container.decode(AzureManagedIdentitiesAuthPlugin.self, forKey: .azureManagedIdentity))
+                default:
+                    throw DecodingError.dataCorrupted(
+                        DecodingError.Context(
+                            codingPath: container.codingPath,
+                            debugDescription: "Unexpected credential key: \(key.stringValue)"
                         )
-                    }
-
-                    self = foundCredentials[0]
+                    )
                 }
             }
 

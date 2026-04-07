@@ -7,10 +7,10 @@ import Testing
 
 @testable import Runtime
 
-// MARK: - HTTP Bundle Tests
+// MARK: - Default No Auth HTTP Bundle Tests
 
-@Suite("RuntimeHTTPBundleTests")
-struct RuntimeHTTPBundleTests {
+@Suite("RuntimeHTTPBundleDefaultNoAuthTests")
+struct RuntimeHHTTPBundleDefaultNoAuthTests {
     // MARK: - Valid HTTP Cases
     @Test("simple HTTP service with tarball bundle")
     func testValidHTTPBundle() async throws {

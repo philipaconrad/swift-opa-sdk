@@ -82,7 +82,7 @@ extension OPA {
                 self.services = services
             } catch {
                 let servicesArray = try container.decodeIfPresent([ServiceConfig].self, forKey: .services) ?? []
-                var services = [String: ServiceConfig]()
+                var services = [String: ServiceConfig](minimumCapacity: servicesArray.count)
                 for (idx, service) in servicesArray.enumerated() {
                     guard let name = service.name else {
                         throw OPA.ConfigError(
