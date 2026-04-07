@@ -24,13 +24,11 @@ struct RuntimeHTTPBundleTests {
 
         let configJSON = """
             {
-              "services": {
-                "test-svc": {"url": "\(server.baseURL)"}
-              },
-                            "bundles": {
+              "services": {"test-svc": {"url": "\(server.baseURL)"}},
+              "bundles": {
                 "test": {"service": "test-svc", "resource": "/bundles/bundle.tar.gz"}
-                            }
-                        }
+              }
+            }
             """
 
         let config = try JSONDecoder().decode(OPA.Config.self, from: configJSON.data(using: .utf8)!)
@@ -64,14 +62,12 @@ struct RuntimeHTTPBundleTests {
         defer { Task { try? await server.shutdown() } }
 
         let configJSON = """
-                        {
-              "services": {
-                "my-service": {"url": "\(server.baseURL)"}
-              },
-                            "bundles": {
+            {
+              "services": {"my-service": {"url": "\(server.baseURL)"}},
+              "bundles": {
                 "test": {"service": "my-service", "resource": "/custom/path/my-bundle.tar.gz"}
-                            }
-                        }
+              }
+            }
             """
 
         let config = try JSONDecoder().decode(OPA.Config.self, from: configJSON.data(using: .utf8)!)
@@ -99,13 +95,11 @@ struct RuntimeHTTPBundleTests {
 
         let configJSON = """
             {
-              "services": {
-                "test-svc": {"url": "\(server.baseURL)"}
-              },
-                            "bundles": {
+              "services": {"test-svc": {"url": "\(server.baseURL)"}},
+              "bundles": {
                 "test": {"service": "test-svc", "resource": "/bundles/nonexistent.tar.gz"}
-                            }
-                        }
+              }
+            }
             """
 
         let config = try JSONDecoder().decode(OPA.Config.self, from: configJSON.data(using: .utf8)!)
@@ -123,13 +117,11 @@ struct RuntimeHTTPBundleTests {
     func testInvalidServiceScheme() async throws {
         let configJSON = """
             {
-              "services": {
-                "bad-svc": {"url": "ftp://example.com"}
-              },
-                            "bundles": {
+              "services": {"bad-svc": {"url": "ftp://example.com"}},
+              "bundles": {
                 "test": {"service": "bad-svc", "resource": "/bundle.tar.gz"}
-                            }
-                        }
+              }
+            }
             """
         #expect(throws: (any Error).self) {
             _ = try JSONDecoder().decode(OPA.Config.self, from: configJSON.data(using: .utf8)!)

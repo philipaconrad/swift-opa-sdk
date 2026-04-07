@@ -137,7 +137,7 @@ extension OPA {
 
                     let foundCredentials = attemptedCredentialTypes.compactMap { $0 }
 
-                    guard foundCredentials.count <= 1 else {
+                    guard foundCredentials.count == 1 else {
                         throw DecodingError.dataCorrupted(
                             DecodingError.Context(
                                 codingPath: container.codingPath,
@@ -147,7 +147,7 @@ extension OPA {
                         )
                     }
 
-                    self = foundCredentials.first ?? .defaultNoAuth
+                    self = foundCredentials[0]
                 }
             }
 

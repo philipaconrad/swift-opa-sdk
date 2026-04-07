@@ -13,6 +13,13 @@ extension OPA {
         public let customHeaders: [String: String]
         public var httpClient: HTTPClient
 
+        /// Initialize a new RESTClientBundleLoader.
+        /// - Parameters:
+        ///   - services: The services configuration.
+        ///   - name: The name of the bundle to load.
+        ///   - resource: The bundle source configuration.
+        ///   - headers: Optional headers to include in the request.
+        ///   - httpClient: Optional HTTP client to use. Defaults to `HTTPClient.shared` with TLS configuration parameters derived from the OPA config.
         public init(
             services: [String: ServiceConfig],
             name: String,
@@ -22,7 +29,6 @@ extension OPA {
         )
             throws
         {
-
             // Fail if no bundle service specified.
             guard !resource.service.isEmpty else {
                 throw RuntimeError(
