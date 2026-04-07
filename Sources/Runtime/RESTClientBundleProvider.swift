@@ -112,7 +112,8 @@ extension OPA {
                         message: "Bundle download failed with response code: \(response.status.code)")
                 }
 
-                let data = Data(buffer: body)  // Convert ByteBuffer to Data
+                // Convert ByteBuffer to Data
+                let data = Data(body.readableBytesView)
 
                 // Decode the tarball into an OPA.Bundle
                 return .success(try OPA.Bundle.decodeFromTarball(from: data))
