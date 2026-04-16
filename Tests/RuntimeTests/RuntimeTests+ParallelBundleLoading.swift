@@ -34,7 +34,7 @@ struct ParallelBundleLoadingTests {
         let expectedFailureNames: Set<String>
     }
 
-    // MARK: - Test casesWhat
+    // MARK: - Test cases
 
     static var testCases: [TestCase] {
         [
@@ -236,7 +236,7 @@ struct ParallelBundleLoadingTests {
 
         let config = try JSONDecoder().decode(
             OPA.Config.self, from: configJSON.data(using: .utf8)!)
-        return await OPA.Runtime(config: config)
+        return try OPA.Runtime(config: config)
     }
 
     // Assert that bundle storage and the computed `bundles` property match expectations.

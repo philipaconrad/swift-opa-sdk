@@ -30,7 +30,7 @@ extension OPA {
 
     /// Represents polling configuration for the downloader.
     // From: v1/download/config.go
-    public struct PollingConfig: Codable, Sendable {
+    public struct PollingConfig: Codable, Equatable, Sendable {
         public let minDelaySeconds: Int64?
         public let maxDelaySeconds: Int64?
         public let longPollingTimeoutSeconds: Int64?
@@ -119,7 +119,7 @@ extension OPA {
 
     /// Represents the configuration for the downloader.
     // From: v1/download/config.go
-    public struct DownloaderConfig: Codable, Sendable {
+    public struct DownloaderConfig: Codable, Equatable, Sendable {
         public let trigger: TriggerMode?
         public let polling: PollingConfig?
 

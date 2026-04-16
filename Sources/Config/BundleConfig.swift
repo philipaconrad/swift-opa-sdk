@@ -6,7 +6,7 @@ extension OPA {
 
     /// Represents the key configuration used to verify a signed bundle.
     // From: v1/keys/keys.go
-    public struct BundleVerificationConfig: Codable, Sendable {
+    public struct BundleVerificationConfig: Codable, Equatable, Sendable {
         public let publicKeys: [String: KeyConfig]
         public let keyID: String
         public let scope: String
@@ -71,7 +71,7 @@ extension OPA {
 
     /// A configured bundle source to download bundles from.
     // From: v1/plugins/bundle/bundle.go
-    public struct BundleSourceConfig: Codable, Sendable {
+    public struct BundleSourceConfig: Codable, Equatable, Sendable {
         public let downloaderConfig: DownloaderConfig
         public let service: String
         public let resource: String?

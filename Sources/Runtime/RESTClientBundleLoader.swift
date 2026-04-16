@@ -7,6 +7,11 @@ import Rego
 
 extension OPA {
     /// RESTClientBundleLoader abstracts over OPA's HTTP-based bundle sources.
+    ///
+    /// ## Limitations
+    ///
+    /// - Bundle persistence for downloaded bundles is not yet implemented.
+    /// - Bundle signature verification is not yet implemented.
     public struct RESTClientBundleLoader: HTTPBundleLoader, BundleLoader {
         public let name: String
         public let fetchURL: URL
@@ -66,6 +71,58 @@ extension OPA {
             self.longPollingEnabled = false
         }
 
+        /// Constructor for loading from the `discovery` section of the config.
+        public init(
+            discoveryConfig config: OPA.Config
+        ) throws {
+            self = try Self.init(discoveryConfig: config, etag: nil)
+        }
+
+        public init(
+            discoveryConfig config: OPA.Config,
+            etag: String? = nil,
+            headers: [String: String]? = nil,
+            httpClient: HTTPClient? = nil
+        ) throws {
+            guard let discovery = config.discovery else {
+                throw RuntimeError(
+                    code: .internalError,
+                    message: "No discovery config found."
+                )
+            }
+
+            guard !discovery.service.isEmpty else {
+                throw RuntimeError(
+                    code: .internalError,
+                    message: "No service config was provided for discovery."
+                )
+            }
+
+            guard let service = config.services[discovery.service] else {
+                throw RuntimeError(
+                    code: .internalError,
+                    message: "Service '\(discovery.service)' referenced by discovery config not found."
+                )
+            }
+
+            self.name = "discovery"
+            self.fetchURL = service.url.appending(
+                path: discovery.resource)  // TODO: Should we default this to: "/bundles/discovery"?
+            self.etag = etag ?? ""
+            self.serviceConfig = service
+            self.bundleConfig = try BundleSourceConfig(
+                downloaderConfig: discovery.downloaderConfig,
+                service: discovery.service,
+                resource: discovery.resource,
+                signing: discovery.signing
+            )
+            self.customHeaders = headers ?? [:]
+            self.httpClient = httpClient ?? HTTPClient.shared
+            self.polling = discovery.downloaderConfig.polling
+            self.lastBundle = nil
+            self.longPollingEnabled = false
+        }
+
         // If the resource is for a compatible bundle source, we can load it.
         public static func compatibleWithConfig(config: Config, bundleResourceName: String) -> Bool {
             guard let resource = config.bundles[bundleResourceName] else {
@@ -84,6 +141,26 @@ extension OPA {
             switch service.credentials {
             case .defaultNoAuth, .bearer(_), .clientTLS(_): return true
             // Other REST client types not implemented yet.
+            default: return false
+            }
+        }
+
+        public static func compatibleWithDiscoveryConfig(config: Config) -> Bool {
+            guard let discovery = config.discovery else {
+                return false
+            }
+
+            let isFileURL = (URL(string: discovery.resource)?.scheme == "file")
+            guard !isFileURL && !discovery.service.isEmpty else {
+                return false
+            }
+
+            guard let service = config.services[discovery.service] else {
+                return false
+            }
+
+            switch service.credentials {
+            case .defaultNoAuth, .bearer(_), .clientTLS(_): return true
             default: return false
             }
         }

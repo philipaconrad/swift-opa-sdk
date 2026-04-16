@@ -83,7 +83,7 @@ extension OPA {
     // MARK: - ReportingConfig
 
     /// Represents configuration for the plugin's reporting behaviour.
-    public struct ReportingConfig: Codable, Sendable {
+    public struct ReportingConfig: Codable, Equatable, Sendable {
         /// Toggles how the buffer stores events.
         public let bufferType: String
 
@@ -213,7 +213,7 @@ extension OPA {
 
     // MARK: - RequestContextConfig
 
-    public struct RequestContextConfig: Codable, Sendable {
+    public struct RequestContextConfig: Codable, Equatable, Sendable {
         public let httpRequest: HTTPRequestContextConfig?
 
         public init(httpRequest: HTTPRequestContextConfig? = nil) {
@@ -227,7 +227,7 @@ extension OPA {
 
     // MARK: - HTTPRequestContextConfig
 
-    public struct HTTPRequestContextConfig: Codable, Sendable {
+    public struct HTTPRequestContextConfig: Codable, Equatable, Sendable {
         public let headers: [String]?
 
         public init(headers: [String]? = nil) {
@@ -242,7 +242,7 @@ extension OPA {
     // MARK: - DecisionLogsConfig
 
     /// Represents the plugin configuration.
-    public struct DecisionLogsConfig: Codable, Sendable {
+    public struct DecisionLogsConfig: Codable, Equatable, Sendable {
         public let plugin: String?
         public let service: String
         public let partitionName: String?
@@ -350,13 +350,13 @@ extension OPA {
         /// Ported from the context-dependent portions of Go's
         /// `Config.validateAndInjectDefaults`.
         public func validateWithContext(
-            services: [String],
-            plugins: [String],
+            serviceNames: [String],
+            pluginNames: [String],
             trigger: TriggerMode?
         ) throws {
             // plugin validation
             if let pluginName = plugin {
-                guard plugins.contains(pluginName) else {
+                guard pluginNames.contains(pluginName) else {
                     throw DecisionLogsConfigError.invalidPluginName(pluginName)
                 }
             }
@@ -364,7 +364,7 @@ extension OPA {
             // service validation: when no plugin is set and a service name
             // is explicitly provided, verify it exists.
             if plugin == nil && !service.isEmpty {
-                guard services.contains(service) else {
+                guard serviceNames.contains(service) else {
                     throw DecisionLogsConfigError.invalidServiceName(service)
                 }
             }

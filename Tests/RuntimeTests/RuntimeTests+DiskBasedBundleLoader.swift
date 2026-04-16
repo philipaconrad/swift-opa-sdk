@@ -100,7 +100,7 @@ struct RuntimeDiskBasedBundleTests {
         // Build an updated OPA Config, then start up the runtime.
         let updatedConfig: Data = tc.config.replacingOccurrences(of: "{TEMP}", with: tempDir.path()).data(using: .utf8)!
         let config: OPA.Config = try JSONDecoder().decode(OPA.Config.self, from: updatedConfig)
-        let rt = await OPA.Runtime(config: config)
+        let rt = try OPA.Runtime(config: config)
 
         let backgroundFetchTask = Task { try await rt.run() }
         defer { backgroundFetchTask.cancel() }
@@ -242,7 +242,7 @@ struct RuntimeDiskBasedBundleTests {
             let config = try JSONDecoder().decode(OPA.Config.self, from: configString.data(using: .utf8)!)
             // Runtime init or bundle loader construction should throw
             await #expect(throws: RuntimeError.self) {
-                let rt = await OPA.Runtime(config: config)
+                let rt = try OPA.Runtime(config: config)
 
                 let backgroundFetchTask = Task { try await rt.run() }
                 defer { backgroundFetchTask.cancel() }
