@@ -1,6 +1,3 @@
-import AST
-import AsyncHTTPClient
-import Config
 import Foundation
 import Rego
 import Testing
@@ -32,17 +29,22 @@ struct RuntimeHHTTPBundleDefaultNoAuthTests {
             """
 
         let config = try JSONDecoder().decode(OPA.Config.self, from: configJSON.data(using: .utf8)!)
-        var rt = await OPA.Runtime(config: config, bundles: [:])
+        let rt = await OPA.Runtime(config: config)
+
+        let backgroundFetchTask = Task { try await rt.run() }
+        defer { backgroundFetchTask.cancel() }
+
+        let _ = await waitForBundleLoad(rt: rt, name: "test", timeout: .seconds(1))
+        let bundleStorage = await rt.bundleStorage
         let bundleResult = try #require(
-            rt.bundleStorage.first, "Expected exactly 1 bundle, got \(rt.bundleStorage.count)")
-        #expect(rt.bundleStorage.count == 1, "Expected exactly 1 bundle, got \(rt.bundleStorage.count)")
+            bundleStorage.first, "Expected exactly 1 bundle, got \(bundleStorage.count)")
+        #expect(bundleStorage.count == 1, "Expected exactly 1 bundle, got \(bundleStorage.count)")
         guard case .success = bundleResult.value else {
             Issue.record("Expected bundle '\(bundleResult.key)' to be .success, got \(bundleResult.value)")
             return
         }
-        try await rt.prepare(queries: ["data/foo/hello"])
         #expect(
-            rt.bundleStorage.allSatisfy { (_, value) in
+            bundleStorage.allSatisfy { (_, value) in
                 if case .success = value { return true }
                 return false
             })
@@ -71,16 +73,20 @@ struct RuntimeHHTTPBundleDefaultNoAuthTests {
             """
 
         let config = try JSONDecoder().decode(OPA.Config.self, from: configJSON.data(using: .utf8)!)
-        var rt = await OPA.Runtime(config: config, bundles: [:])
+        let rt = await OPA.Runtime(config: config)
 
+        let backgroundFetchTask = Task { try await rt.run() }
+        defer { backgroundFetchTask.cancel() }
+
+        let _ = await waitForBundleLoad(rt: rt, name: "test", timeout: .seconds(1))
+        let bundleStorage = await rt.bundleStorage
         let bundleResult = try #require(
-            rt.bundleStorage.first, "Expected exactly 1 bundle, got \(rt.bundleStorage.count)")
-        #expect(rt.bundleStorage.count == 1, "Expected exactly 1 bundle, got \(rt.bundleStorage.count)")
+            bundleStorage.first, "Expected exactly 1 bundle, got \(bundleStorage.count)")
+        #expect(bundleStorage.count == 1, "Expected exactly 1 bundle, got \(bundleStorage.count)")
         guard case .success = bundleResult.value else {
             Issue.record("Expected bundle '\(bundleResult.key)' to be .success, got \(bundleResult.value)")
             return
         }
-        try await rt.prepare(queries: ["data/foo/hello"])
 
         let dr = try await rt.decision("data/foo/hello", input: nil)
         #expect(dr.result.first == ["result": 1])
@@ -103,11 +109,16 @@ struct RuntimeHHTTPBundleDefaultNoAuthTests {
             """
 
         let config = try JSONDecoder().decode(OPA.Config.self, from: configJSON.data(using: .utf8)!)
-        let rt = await OPA.Runtime(config: config, bundles: [:])
+        let rt = await OPA.Runtime(config: config)
 
-        #expect(rt.bundleStorage.count == 1)
+        let backgroundFetchTask = Task { try await rt.run() }
+        defer { backgroundFetchTask.cancel() }
+
+        let _ = await waitForBundleLoad(rt: rt, name: "test", timeout: .seconds(1))
+        let bundleStorage = await rt.bundleStorage
+        #expect(bundleStorage.count == 1)
         #expect(
-            rt.bundleStorage.allSatisfy { (_, value) in
+            bundleStorage.allSatisfy { (_, value) in
                 if case .failure = value { return true }
                 return false
             }, "Expected bundle load to fail for 404 response")

@@ -1,5 +1,3 @@
-import AST
-import Config
 import Foundation
 import Rego
 import Testing
@@ -102,13 +100,16 @@ struct RuntimeDiskBasedBundleTests {
         // Build an updated OPA Config, then start up the runtime.
         let updatedConfig: Data = tc.config.replacingOccurrences(of: "{TEMP}", with: tempDir.path()).data(using: .utf8)!
         let config: OPA.Config = try JSONDecoder().decode(OPA.Config.self, from: updatedConfig)
-        var rt = await OPA.Runtime(config: config, bundles: [:])
+        let rt = await OPA.Runtime(config: config)
 
-        // Prepare query.
-        try await rt.prepare(queries: ["data/foo/hello"])
-        #expect(rt.bundleStorage.count == 1, "Expected exactly 1 succesful bundle load, got \(rt.bundleStorage.count)")
+        let backgroundFetchTask = Task { try await rt.run() }
+        defer { backgroundFetchTask.cancel() }
+        let _ = await waitForBundleLoad(rt: rt, name: "test", timeout: .seconds(1))
+
+        let bundleStorage = await rt.bundleStorage
+        #expect(bundleStorage.count == 1, "Expected exactly 1 succesful bundle load, got \(bundleStorage.count)")
         #expect(
-            rt.bundleStorage.allSatisfy({ (key: String, value: Result<OPA.Bundle, any Error>) in
+            bundleStorage.allSatisfy({ (key: String, value: Result<OPA.Bundle, any Error>) in
                 if case .success = value { return true }
                 return false
             }))
@@ -241,8 +242,14 @@ struct RuntimeDiskBasedBundleTests {
             let config = try JSONDecoder().decode(OPA.Config.self, from: configString.data(using: .utf8)!)
             // Runtime init or bundle loader construction should throw
             await #expect(throws: RuntimeError.self) {
-                let rt = await OPA.Runtime(config: config, bundles: [:])
-                for (_, bundleResult) in rt.bundleStorage {
+                let rt = await OPA.Runtime(config: config)
+
+                let backgroundFetchTask = Task { try await rt.run() }
+                defer { backgroundFetchTask.cancel() }
+
+                let _ = await waitForBundleLoad(rt: rt, name: "test", timeout: .seconds(1))
+                let bundleStorage = await rt.bundleStorage
+                for (_, bundleResult) in bundleStorage {
                     let _ = try bundleResult.get()
                 }
             }

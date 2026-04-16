@@ -7,15 +7,24 @@ extension OPA {
     public struct DiskBasedBundleLoader: BundleLoader {
         public let name: String
         public let fetchURL: URL
+        public let polling: PollingConfig?
 
-        public init(services: [String: ServiceConfig], name: String, resource: BundleSourceConfig) throws {
-            self.name = name
+        public init(config: OPA.Config, bundleResourceName: String) throws {
+            self.name = bundleResourceName
+            guard let resource = config.bundles[bundleResourceName] else {
+                throw RuntimeError(
+                    code: .internalError,
+                    message: "No bundle config was found for bundle resource \(bundleResourceName)."
+                )
+            }
+
             guard let url = URL(string: resource.resource ?? "") else {
                 throw RuntimeError(
                     code: .internalError,
                     message: "Invalid URL for bundle config \(name): \(resource.resource ?? "")"
                 )
             }
+
             // If no bundle service specified to fetch from, make sure we have a file URL to load from disk.
             guard !(resource.service.isEmpty && url.scheme != "file") else {
                 throw RuntimeError(
@@ -23,11 +32,17 @@ extension OPA {
                     message: "No service config or file:// URL was provided for bundle config \(name)."
                 )
             }
+
+            self.polling = resource.downloaderConfig.polling
             self.fetchURL = url
         }
 
         // If the resource is a file URL, we can load it.
-        public static func compatibleWithConfig(resource: BundleSourceConfig) -> Bool {
+        public static func compatibleWithConfig(config: Config, bundleResourceName: String) -> Bool {
+            guard let resource = config.bundles[bundleResourceName] else {
+                return false
+            }
+
             return (URL(string: resource.resource ?? "")?.scheme == "file")
         }
 

@@ -10,7 +10,7 @@ extension OPA {
         public let labels: [String: String]
         public let discovery: DiscoveryConfig?
         public let bundles: [String: BundleSourceConfig]
-        // public let decisionLogs: DecisionLogsConfig?
+        public let decisionLogs: DecisionLogsConfig?
         // public let status: StatusConfig?
         // public let plugins: [String: PluginConfig]
         public let keys: [String: KeyConfig]
@@ -18,7 +18,7 @@ extension OPA {
         // public let defaultAuthorizationDecision: String?
         // public let caching: CachingConfig?
         // public let ndBuiltinCache: Bool?
-        // public let persistenceDirectory: String?
+        public let persistenceDirectory: String?
         // public let distributedTracing: DistributedTracingConfig?
         // public let server: ServerConfig?
         // public let storage: StorageConfig?
@@ -29,15 +29,15 @@ extension OPA {
             labels: [String: String] = [:],
             discovery: DiscoveryConfig? = nil,
             bundles: [String: BundleSourceConfig] = [:],
-            // decisionLogs: DecisionLogsConfig? = nil,
+            decisionLogs: DecisionLogsConfig? = nil,
             // status: StatusConfig? = nil,
             // plugins: [String: PluginConfig] = [:],
-            keys: [String: KeyConfig] = [:]
-                // defaultDecision: String? = nil,
-                // defaultAuthorizationDecision: String? = nil,
-                // caching: CachingConfig? = nil,
-                // ndBuiltinCache: Bool? = nil,
-                // persistenceDirectory: String? = nil,
+            keys: [String: KeyConfig] = [:],
+            // defaultDecision: String? = nil,
+            // defaultAuthorizationDecision: String? = nil,
+            // caching: CachingConfig? = nil,
+            // ndBuiltinCache: Bool? = nil,
+            persistenceDirectory: String? = nil
                 // distributedTracing: DistributedTracingConfig? = nil,
                 // server: ServerConfig? = nil,
                 // storage: StorageConfig? = nil,
@@ -47,7 +47,7 @@ extension OPA {
             self.labels = labels
             let discovery = discovery
             let bundles = bundles
-            // self.decisionLogs = decisionLogs
+            self.decisionLogs = decisionLogs
             // self.status = status
             // self.plugins = plugins
             let keys = keys
@@ -55,7 +55,7 @@ extension OPA {
             // self.defaultAuthorizationDecision = defaultAuthorizationDecision
             // self.caching = caching
             // self.ndBuiltinCache = ndBuiltinCache
-            // self.persistenceDirectory = persistenceDirectory
+            self.persistenceDirectory = persistenceDirectory
             // self.distributedTracing = distributedTracing
             // self.server = server
             // self.storage = storage
@@ -97,7 +97,7 @@ extension OPA {
             self.labels = try container.decodeIfPresent([String: String].self, forKey: .labels) ?? [:]
             let discovery = try container.decodeIfPresent(DiscoveryConfig.self, forKey: .discovery)
             let bundles = try container.decodeIfPresent([String: BundleSourceConfig].self, forKey: .bundles) ?? [:]
-            // self.decisionLogs = try container.decodeIfPresent(DecisionLogsConfig.self, forKey: .decisionLogs)
+            self.decisionLogs = try container.decodeIfPresent(DecisionLogsConfig.self, forKey: .decisionLogs)
             // self.status = try container.decodeIfPresent(StatusConfig.self, forKey: .status)
             // self.plugins = try container.decodeIfPresent([String: PluginConfig].self, forKey: .plugins) ?? [:]
             let keys = try container.decodeIfPresent([String: KeyConfig].self, forKey: .keys) ?? [:]
@@ -105,7 +105,7 @@ extension OPA {
             // self.defaultAuthorizationDecision = try container.decodeIfPresent(String.self, forKey: .defaultAuthorizationDecision)
             // self.caching = try container.decodeIfPresent(CachingConfig.self, forKey: .caching)
             // self.ndBuiltinCache = try container.decodeIfPresent(Bool.self, forKey: .ndBuiltinCache)
-            // self.persistenceDirectory = try container.decodeIfPresent(String.self, forKey: .persistenceDirectory)
+            self.persistenceDirectory = try container.decodeIfPresent(String.self, forKey: .persistenceDirectory)
             // self.distributedTracing = try container.decodeIfPresent(DistributedTracingConfig.self, forKey: .distributedTracing)
             // self.server = try container.decodeIfPresent(ServerConfig.self, forKey: .server)
             // self.storage = try container.decodeIfPresent(StorageConfig.self, forKey: .storage)
@@ -130,7 +130,7 @@ extension OPA {
             try container.encodeIfPresent(labels.isEmpty ? nil : labels, forKey: .labels)
             try container.encodeIfPresent(discovery, forKey: .discovery)
             try container.encodeIfPresent(bundles.isEmpty ? nil : bundles, forKey: .bundles)
-            // try container.encodeIfPresent(decisionLogs, forKey: .decisionLogs)
+            try container.encodeIfPresent(decisionLogs, forKey: .decisionLogs)
             // try container.encodeIfPresent(status, forKey: .status)
             // try container.encodeIfPresent(plugins.isEmpty ? nil : plugins, forKey: .plugins)
             try container.encodeIfPresent(keys, forKey: .keys)
@@ -138,7 +138,7 @@ extension OPA {
             // try container.encodeIfPresent(defaultAuthorizationDecision, forKey: .defaultAuthorizationDecision)
             // try container.encodeIfPresent(caching, forKey: .caching)
             // try container.encodeIfPresent(ndBuiltinCache, forKey: .ndBuiltinCache)
-            // try container.encodeIfPresent(persistenceDirectory, forKey: .persistenceDirectory)
+            try container.encodeIfPresent(persistenceDirectory, forKey: .persistenceDirectory)
             // try container.encodeIfPresent(distributedTracing, forKey: .distributedTracing)
             // try container.encodeIfPresent(server, forKey: .server)
             // try container.encodeIfPresent(storage, forKey: .storage)

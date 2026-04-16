@@ -1,5 +1,3 @@
-import AST
-import Config
 import Foundation
 import Rego
 import Testing
