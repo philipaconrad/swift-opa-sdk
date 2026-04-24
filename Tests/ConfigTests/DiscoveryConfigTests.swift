@@ -18,7 +18,8 @@ struct DiscoveryConfigTests {
                 description: "minimal discovery config",
                 json: #"""
                     {
-                        "resource": "https://example.com/discovery"
+                        "service": "acmecorp",
+                        "resource": "/discovery"
                     }
                     """#
             ),

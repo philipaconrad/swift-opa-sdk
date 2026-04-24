@@ -515,7 +515,8 @@ struct ConfigRoundtripTests {
                 json: #"""
                     {
                         "discovery": {
-                            "resource": "https://example.com/discovery"
+                            "service": "acmecorp",
+                            "resource": "/discovery"
                         }
                     }
                     """#

@@ -9,7 +9,7 @@ extension OPA {
 
     /// Configuration for a REST client service
     // From: v1/plugins/rest/rest.go
-    public struct ServiceConfig: Codable, Sendable, Equatable {
+    public struct ServiceConfig: Codable, Equatable, Sendable {
         public let name: String?
         public let url: URL
         public let headers: [String: String]?

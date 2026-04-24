@@ -6,10 +6,10 @@ extension OPA {
     /// A type that produces configuration updates over time.
     ///
     /// Implementations run independently (off the Runtime actor) and
-    /// yield new ``OPA.Config`` values through an `AsyncStream` whenever
-    /// the active configuration should change. The Runtime consumes
-    /// these updates, reloading bundles and restarting polling workers
-    /// for each new configuration.
+    /// yield ``Result<OPA.Config, Error>`` values through an `AsyncStream`
+    /// whenever the active configuration should change (or an error occurs
+    /// fetching it). The Runtime consumes these updates, reloading bundles
+    /// and restarting polling workers for each successful new configuration.
     ///
     /// Conforming types must be `Sendable` so they can be safely handed
     /// off to a child task in the Runtime's task group.
@@ -29,13 +29,18 @@ extension OPA {
     /// }
     /// ```
     public protocol ConfigProvider: Sendable {
-        /// Produces configuration values until cancelled.
-        ///
-        /// Implementations should:
-        /// 1. Yield an initial config as soon as it's available.
-        /// 2. Yield subsequent configs whenever the configuration changes.
-        /// 3. Call `continuation.finish()` when done (typically in a `defer`).
-        /// 4. Exit on `Task.isCancelled`.
-        func run(yielding continuation: AsyncStream<OPA.Config>.Continuation) async
+        /// Needs a public constructor that can build from the config directly.
+        init(config: OPA.Config) throws
+
+        /// Load (or re-load) the discovered configuration, based on the
+        /// initial config and any existing state.
+        mutating func load() async -> Result<OPA.Config, any Swift.Error>
+    }
+
+    /// HTTPConfigProvider is a slightly more specialized protocol to allow greater
+    /// control for HTTP-based config providers (e.g. Discovery).
+    public protocol HTTPConfigProvider: ConfigProvider, Sendable {
+        /// Used by the loader-managing task to determine whether to sleep or not between polls.
+        func isLongPollingEnabled() -> Bool
     }
 }

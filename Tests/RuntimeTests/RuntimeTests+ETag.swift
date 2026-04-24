@@ -297,7 +297,7 @@ func withRunningRuntime(
     _ body: (OPA.Runtime) async throws -> Void
 ) async throws {
     let config = try JSONDecoder().decode(OPA.Config.self, from: configJSON.data(using: .utf8)!)
-    let rt = await OPA.Runtime(config: config)
+    let rt = try OPA.Runtime(config: config)
 
     let backgroundTask = Task { try await rt.run() }
     defer { backgroundTask.cancel() }

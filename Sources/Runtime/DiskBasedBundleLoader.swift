@@ -3,7 +3,12 @@ import Foundation
 import Rego
 
 extension OPA {
-    /// DiskBasedBundleLoader abstracts over folder and tarball bundles.
+    /// DiskBasedBundleLoader abstracts over loading bundles
+    /// from on-disk folders tarball files.
+    ///
+    /// ## Limitations
+    ///
+    /// - Bundle signature verification is not yet implemented.
     public struct DiskBasedBundleLoader: BundleLoader {
         public let name: String
         public let fetchURL: URL
@@ -37,13 +42,48 @@ extension OPA {
             self.fetchURL = url
         }
 
+        /// Constructor for loading from the `discovery` section of the config.
+        public init(discoveryConfig config: OPA.Config) throws {
+            guard let discovery = config.discovery else {
+                throw RuntimeError(
+                    code: .internalError,
+                    message: "No discovery config found."
+                )
+            }
+
+            guard let url = URL(string: discovery.resource) else {
+                throw RuntimeError(
+                    code: .internalError,
+                    message: "Invalid URL for discovery resource: \(discovery.resource)"
+                )
+            }
+
+            guard url.scheme == "file" else {
+                throw RuntimeError(
+                    code: .internalError,
+                    message: "DiskBasedBundleLoader requires a file:// URL for discovery resource."
+                )
+            }
+
+            self.name = "discovery"
+            self.fetchURL = url
+            self.polling = discovery.downloaderConfig.polling
+        }
+
         // If the resource is a file URL, we can load it.
-        public static func compatibleWithConfig(config: Config, bundleResourceName: String) -> Bool {
+        public static func compatibleWithConfig(config: OPA.Config, bundleResourceName: String) -> Bool {
             guard let resource = config.bundles[bundleResourceName] else {
                 return false
             }
 
             return (URL(string: resource.resource ?? "")?.scheme == "file")
+        }
+
+        public static func compatibleWithDiscoveryConfig(config: OPA.Config) -> Bool {
+            guard let discovery = config.discovery else {
+                return false
+            }
+            return URL(string: discovery.resource)?.scheme == "file"
         }
 
         public func load() async -> Result<Bundle, any Swift.Error> {

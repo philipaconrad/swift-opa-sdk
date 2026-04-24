@@ -16,6 +16,9 @@ public struct RuntimeError: Sendable, Swift.Error {
             case bundleRootConflictError
             case bundleUnpreparedError
             case invalidArgumentError
+
+            // Discovery errors
+            case discoveryNotSupported
         }
 
         private let internalCode: InternalCode
@@ -32,6 +35,9 @@ public struct RuntimeError: Sendable, Swift.Error {
         public static let bundleUnpreparedError = Code(.bundleUnpreparedError)
         public static let internalError = Code(.internalError)
         public static let invalidArgumentError = Code(.invalidArgumentError)
+
+        // Discovery-related codes
+        public static let discoveryNotSupported = Code(.discoveryNotSupported)
     }
 
     /// A code representing the high-level domain of the error.
@@ -42,4 +48,10 @@ public struct RuntimeError: Sendable, Swift.Error {
 
     /// The original error which led to this error being thrown.
     public var cause: (any Swift.Error)?
+
+    public init(code: Code, message: String, cause: (any Swift.Error)? = nil) {
+        self.code = code
+        self.message = message
+        self.cause = cause
+    }
 }

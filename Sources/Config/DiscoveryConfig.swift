@@ -6,19 +6,19 @@ extension OPA {
 
     /// Represents the configuration for the discovery feature.
     // From: v1/plugins/discovery/config.go
-    public struct DiscoveryConfig: Codable, Sendable {
+    public struct DiscoveryConfig: Codable, Equatable, Sendable {
         public let downloaderConfig: DownloaderConfig
         public let decision: String?
         public let service: String
-        public let resource: String?
+        public let resource: String
         public let signing: BundleVerificationConfig?
         public let persist: Bool
 
         public init(
             downloaderConfig: DownloaderConfig? = nil,
             decision: String? = nil,
-            service: String = "",
-            resource: String? = nil,
+            service: String,
+            resource: String,
             signing: BundleVerificationConfig? = nil,
             persist: Bool = false
         ) throws {
@@ -28,7 +28,6 @@ extension OPA {
             self.resource = resource
             self.signing = signing
             self.persist = persist
-            try self.validate()
         }
 
         /// Returns a new config with all context-dependent properties resolved.
@@ -48,16 +47,6 @@ extension OPA {
                 signing: resolvedSigning,
                 persist: persist
             )
-        }
-
-        /// Validates struct-local constraints.
-        public func validate() throws {
-            if resource == nil {
-                throw ConfigError(
-                    code: .internalError,
-                    message: "missing required discovery.resource field"
-                )
-            }
         }
 
         /// Validates constraints that require context from the parent `Config` struct.
@@ -101,8 +90,8 @@ extension OPA {
             let downloaderConfig = try DownloaderConfig(trigger: trigger, polling: polling)
 
             let decision = try container.decodeIfPresent(String.self, forKey: .decision)
-            let service = try container.decodeIfPresent(String.self, forKey: .service) ?? ""
-            let resource = try container.decodeIfPresent(String.self, forKey: .resource)
+            let service = try container.decode(String.self, forKey: .service)
+            let resource = try container.decode(String.self, forKey: .resource)
             let signing = try container.decodeIfPresent(BundleVerificationConfig.self, forKey: .signing)
             let persist = try container.decodeIfPresent(Bool.self, forKey: .persist) ?? false
 
@@ -125,7 +114,7 @@ extension OPA {
 
             try container.encodeIfPresent(decision, forKey: .decision)
             try container.encode(service, forKey: .service)
-            try container.encodeIfPresent(resource, forKey: .resource)
+            try container.encode(resource, forKey: .resource)
             try container.encodeIfPresent(signing, forKey: .signing)
             try container.encode(persist, forKey: .persist)
         }

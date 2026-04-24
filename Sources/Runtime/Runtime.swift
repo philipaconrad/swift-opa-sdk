@@ -45,10 +45,12 @@ extension OPA {
         /// when a config provider produces new configuration.
         public nonisolated let bootConfig: OPA.Config
 
+        public private(set) var activeConfig: OPA.Config
+
         /// Optional config provider (e.g. discovery) that produces
         /// configuration updates over time. Built at init from the boot
         /// config or injected directly as an init parameter.
-        private let configProvider: (any OPA.ConfigProvider)?
+        private var configProvider: (any OPA.ConfigProvider)?
 
         /// The ID this Runtime instance uses to identify itself in logs and traces.
         public nonisolated let instanceID: String
@@ -58,18 +60,28 @@ extension OPA {
         /// this allows off-actor bundle fetching without an actor hop.
         public nonisolated let httpClient: HTTPClient?
 
+        /// Bundle loader type list to use for loading bundles. Ordered by priority.
+        private nonisolated let bundleLoaders: [BundleLoader.Type]
+
         /// Storage for loaded bundles (both successful and failed).
         public private(set) var bundleStorage: [String: Result<OPA.Bundle, any Swift.Error>]
 
-        /// Accessor for only the successfully loaded bundles.
+        /// Cache of successful bundles, derived from `bundleStorage`.
+        /// Rebuilt lazily when `bundleGeneration` advances past `cachedBundlesGeneration`.
+        private var cachedBundles: [String: OPA.Bundle] = [:]
+        private var cachedBundlesGeneration: UInt64 = .max  // force first build
+
         public var bundles: [String: OPA.Bundle] {
-            var result: [String: OPA.Bundle] = [:]
-            for (name, storage) in bundleStorage {
-                if case .success(let bundle) = storage {
-                    result[name] = bundle
+            if cachedBundlesGeneration != bundleGeneration {
+                var result: [String: OPA.Bundle] = [:]
+                result.reserveCapacity(bundleStorage.count)
+                for (name, storage) in bundleStorage {
+                    if case .success(let bundle) = storage { result[name] = bundle }
                 }
+                cachedBundles = result
+                cachedBundlesGeneration = bundleGeneration
             }
-            return result
+            return cachedBundles
         }
 
         /// Cache for prepared queries. Invalidated when bundles change.
@@ -105,6 +117,7 @@ extension OPA {
         ///   - queries: Initial set of queries to prepare after bundles are loaded.
         ///   - instanceID: An identifier for this Runtime instance.
         ///   - httpClient: The HTTP client to use for network operations.
+        ///   - bundleLoaders: BundleLoader types to use, in priority order.
         ///   - configProvider: An optional config provider. If nil and `config.discovery`
         ///     is set, a ``DiscoveryConfigProvider`` is created automatically.
         public init(
@@ -112,24 +125,28 @@ extension OPA {
             queries: [String]? = nil,
             instanceID: String = UUID().uuidString,
             httpClient: HTTPClient? = nil,
+            bundleLoaders: [BundleLoader.Type] = [
+                OPA.DiskBasedBundleLoader.self,
+                OPA.RESTClientBundleLoader.self,
+            ],
             configProvider: (any OPA.ConfigProvider)? = nil
-        ) async {
+        ) throws {
             self.bootConfig = config
+            self.activeConfig = config
             self.instanceID = instanceID
             self.httpClient = httpClient ?? HTTPClient.shared
+            self.bundleLoaders = bundleLoaders
             self.preparedQueries = [:]
             self.queries = Set(queries ?? [])
             self.bundleGeneration = 0
             self.queryGeneration = queries?.isEmpty == false ? 1 : 0
-
-            // Placeholder values — all stored properties must be set before
-            // calling async methods on self.
             self.bundleStorage = [:]
-            // self.engine = OPA.Engine(bundles: [:])
 
-            // Build config provider: explicit -> (future: discovery) -> none.
+            // Build config provider.
             if let configProvider {
                 self.configProvider = configProvider
+            } else if config.discovery != nil {
+                self.configProvider = try DiscoveryConfigProvider(bootConfig: config, bundleLoaders: bundleLoaders)
             } else {
                 self.configProvider = nil
             }
@@ -150,10 +167,8 @@ extension OPA.Runtime {
 
     // Adds a list of queries from a sequence that will automatically be prepared for later evaluation.
     public func addQueries<S>(_ queries: S) where String == S.Element, S: Sequence {
-        let queryCount = self.queries.count
-        self.queries.formUnion(queries)
-
-        if self.queries.count > queryCount {
+        if !self.queries.isSuperset(of: queries) {
+            self.queries.formUnion(queries)
             self.queryGeneration &+= 1
         }
     }
@@ -162,6 +177,7 @@ extension OPA.Runtime {
     public func removeQuery(_ query: String) {
         if self.queries.contains(query) {
             self.queries.remove(query)
+            self.preparedQueries.removeValue(forKey: query)
             self.queryGeneration &+= 1
         }
     }
@@ -170,6 +186,9 @@ extension OPA.Runtime {
     public func removeQueries<S>(_ queries: S) where String == S.Element, S: Sequence {
         let queryCount = self.queries.count
         self.queries.subtract(queries)
+        for query in queries {
+            self.preparedQueries.removeValue(forKey: query)
+        }
 
         if self.queries.count < queryCount {
             self.queryGeneration &+= 1
@@ -235,20 +254,33 @@ extension OPA.Runtime {
         return pq
     }
 
-    // TODO: Refactor to the more generic "DecisionOptions" struct, once ported.
-    public func decision(
+    /// Fast-path read: actor-isolated but synchronous. Returns nil on miss.
+    private func cachedPreparedQuery(for query: String) -> OPA.Engine.PreparedQuery? {
+        guard self.bundleGeneration == self.preparedBundleGeneration,
+            self.queryGeneration == self.preparedQueryGeneration
+        else { return nil }
+        return self.preparedQueries[query]
+    }
+
+    // Nonisolated entry point — no actor hop for the evaluation itself.
+    public nonisolated func decision(
         _ entrypoint: String,
         input: AST.RegoValue,
         decisionID: String = UUID().uuidString
     ) async throws -> OPA.DecisionResult {
-        let pqs: [String: OPA.Engine.PreparedQuery] = try await prepare(adhocQueries: [entrypoint])
+        // Fast path: one brief actor hop to read the cache, then evaluate off-actor.
+        if let pq = await self.cachedPreparedQuery(for: entrypoint) {
+            let result = try await pq.evaluate(input: input)
+            return OPA.DecisionResult(id: decisionID, result: result)
+        }
 
+        // Slow path: prepare (actor hop + mutation), then evaluate off-actor.
+        let pqs = try await self.prepare(adhocQueries: [entrypoint])
         guard let pq = pqs[entrypoint] else {
             throw RuntimeError(
                 code: .bundleUnpreparedError,
                 message: "Could not find prepared query for entrypoint \(entrypoint)")
         }
-
         let result = try await pq.evaluate(input: input)
         return OPA.DecisionResult(id: decisionID, result: result)
     }
@@ -260,20 +292,14 @@ extension OPA.Runtime {
     /// Starts the Runtime's background workers and blocks until cancelled.
     ///
     /// This creates a task group containing:
-    ///  - A **config provider** task (if configured) that produces
-    ///    ``OPA.Config`` values on a stream (e.g., via discovery).
+    ///  - A **config provider polling task** (if configured) that repeatedly
+    ///    calls ``OPA/ConfigProvider/load()`` and emits results to a stream.
     ///  - A **bundle work group managing task** that consumes configs from
     ///    the stream and (re)spawns bundle polling tasks for configured
-    ///    bundle resource.
+    ///    bundle resources.
     ///
     /// The initial active config is always emitted to bootstrap bundle
     /// workers, even if no config provider is present.
-    ///
-    /// Cancelling the enclosing `Task` tears down all workers cleanly:
-    /// the config provider finishes its stream, the managing task exits
-    /// its `for await` loop, and active bundle pollers are cancelled.
-    ///
-    /// This method blocks until the enclosing task is cancelled.
     public func run() async throws {
         // Extract Sendable values while on the actor so they can be
         // safely captured by child task closures.
@@ -281,18 +307,46 @@ extension OPA.Runtime {
         let initialConfig = self.bootConfig
 
         try await withThrowingTaskGroup(of: Void.self) { group in
-            let (configStream, configContinuation) = AsyncStream<OPA.Config>.makeStream()
+            let (configStream, configContinuation) = AsyncStream<Result<OPA.Config, Error>>.makeStream()
 
-            // Start the config provider (e.g., discovery) if present.
+            // Start the config provider polling loop (e.g., discovery) if present.
             // It runs entirely off the actor and yields configs to the stream.
-            if let provider {
+            if var provider {
+                let polling = Self.pollingConfig(for: provider)
                 group.addTask {
-                    await provider.run(yielding: configContinuation)
+                    defer { configContinuation.finish() }
+
+                    while !Task.isCancelled {
+                        let result = await provider.load()
+
+                        if case .success(let newConfig) = result {
+                            await self.updateActiveConfig(config: newConfig)
+                        }
+                        configContinuation.yield(result)
+
+                        let longPollingEnabled: Bool = {
+                            if let httpProvider = provider as? any OPA.HTTPConfigProvider {
+                                return httpProvider.isLongPollingEnabled()
+                            }
+                            return false
+                        }()
+
+                        if !longPollingEnabled {
+                            let sleepTime = Int64.random(
+                                in: (polling?.minDelaySeconds ?? 60)...(polling?.maxDelaySeconds ?? 120)
+                            )
+                            do {
+                                try await Task.sleep(for: .seconds(sleepTime))
+                            } catch {
+                                break
+                            }
+                        }
+                    }
                 }
             }
 
             // Emit the initial config to bootstrap bundle workers.
-            configContinuation.yield(initialConfig)
+            configContinuation.yield(.success(initialConfig))
             if provider == nil {
                 // No more configs coming — finish the stream so the
                 // config provider task exits after processing the initial config.
@@ -303,7 +357,14 @@ extension OPA.Runtime {
             group.addTask {
                 var currentWorkers: Task<Void, Never>? = nil
 
-                for await config in configStream {
+                for await latestConfig in configStream {
+                    guard case .success(let config) = latestConfig else {
+                        // Either we have a valid new config and need to restart
+                        // everything, or there was an error, and we should go
+                        // back to waiting for a good config to arrive.
+                        continue
+                    }
+
                     // Tear down previous generation of pollers.
                     currentWorkers?.cancel()
                     await currentWorkers?.value
@@ -317,8 +378,11 @@ extension OPA.Runtime {
                             for name in config.bundles.keys {
                                 bundleGroup.addTask {
                                     do {
-                                        var loader = try self.getBundleLoader(name: name, config: config)
+                                        var loader = try self.getBundleLoader(
+                                            name: name,
+                                            config: config)
                                         var longPollingEnabled = false
+                                        let polling = config.bundles[name]?.downloaderConfig.polling
 
                                         while !Task.isCancelled {
                                             // Attempt to fetch bundle. Update storage.
@@ -334,7 +398,6 @@ extension OPA.Runtime {
                                             // If long-polling, the wait is happening in the loader, so skip this.
                                             if !longPollingEnabled {
                                                 do {
-                                                    let polling = config.bundles[name]?.downloaderConfig.polling
                                                     let sleepTime = Int64.random(
                                                         in: (polling?.minDelaySeconds ?? 60)...(polling?.maxDelaySeconds
                                                             ?? 120))
@@ -371,6 +434,32 @@ extension OPA.Runtime {
             for try await _ in group {}
         }
     }
+
+    /// Extracts the polling config from a known provider type.
+    /// Currently specializes on ``DiscoveryConfigProvider``; extend as
+    /// additional providers are added.
+    private nonisolated static func pollingConfig(
+        for provider: any OPA.ConfigProvider
+    ) -> OPA.PollingConfig? {
+        if let discovery = provider as? OPA.DiscoveryConfigProvider {
+            return discovery.pollingConfig()
+        }
+        return nil
+    }
+}
+
+// MARK: - Config Loading
+
+extension OPA.Runtime {
+    /// Updates the active config on the actor.
+    ///
+    /// Called from the config polling loops after an off-actor fetch completes.
+    /// The actor hop is brief.
+    private func updateActiveConfig(
+        config: OPA.Config
+    ) {
+        self.activeConfig = config
+    }
 }
 
 // MARK: - Bundle Loading
@@ -389,11 +478,10 @@ extension OPA.Runtime {
     /// bundle loaders later on that use the "plugins" config section.
     nonisolated func getBundleLoader(
         name: String,
-        config: OPA.Config,
-        bundleLoaders: [OPA.BundleLoader.Type] = [OPA.DiskBasedBundleLoader.self, OPA.RESTClientBundleLoader.self]
+        config: OPA.Config
     ) throws -> OPA.BundleLoader {
         var bundleLoader: OPA.BundleLoader?
-        for loaderType in bundleLoaders {
+        for loaderType in self.bundleLoaders {
             if loaderType.compatibleWithConfig(config: config, bundleResourceName: name) {
                 bundleLoader = try loaderType.init(config: config, bundleResourceName: name)
                 break
