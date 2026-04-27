@@ -157,7 +157,7 @@ extension OPA {
 // MARK: - Query & Decision
 
 extension OPA.Runtime {
-    // Adds a query that will automatically be prepared for later evaluation.
+    /// Adds a query that will automatically be prepared for later evaluation.
     public func addQuery(_ query: String) {
         if !self.queries.contains(query) {
             self.queries.insert(query)
@@ -165,7 +165,7 @@ extension OPA.Runtime {
         }
     }
 
-    // Adds a list of queries from a sequence that will automatically be prepared for later evaluation.
+    /// Adds a list of queries from a sequence that will automatically be prepared for later evaluation.
     public func addQueries<S>(_ queries: S) where String == S.Element, S: Sequence {
         if !self.queries.isSuperset(of: queries) {
             self.queries.formUnion(queries)
@@ -173,7 +173,7 @@ extension OPA.Runtime {
         }
     }
 
-    // Removes a query that will automatically be prepared for later evaluation.
+    /// Removes a query that will automatically be prepared for later evaluation.
     public func removeQuery(_ query: String) {
         if self.queries.contains(query) {
             self.queries.remove(query)
@@ -182,7 +182,7 @@ extension OPA.Runtime {
         }
     }
 
-    // Removes a list of queries from the set the Runtime maintains.
+    /// Removes a list of queries from the set the Runtime maintains.
     public func removeQueries<S>(_ queries: S) where String == S.Element, S: Sequence {
         let queryCount = self.queries.count
         self.queries.subtract(queries)
@@ -195,7 +195,7 @@ extension OPA.Runtime {
         }
     }
 
-    /// Prepares queries for later evaluation. Intended for use
+    /// Prepares queries for later evaluation. Intended for use only
     /// within the Runtime to ensure a set of prepared queries is available.
     /// Warning: Actor concurrency semantics make some bits more subtle
     /// here than expected.
@@ -240,7 +240,7 @@ extension OPA.Runtime {
         return self.preparedQueries
     }
 
-    /// Prepares all queries against the given engine.
+    /// Prepares all queries against the given set of bundles.
     /// Runs outside actor isolation to avoid mutating-async-on-actor restrictions.
     private nonisolated static func prepareQueries(
         bundles: [String: OPA.Bundle],
@@ -254,7 +254,7 @@ extension OPA.Runtime {
         return pq
     }
 
-    /// Fast-path read: actor-isolated but synchronous. Returns nil on miss.
+    // Fast-path read: actor-isolated but synchronous. Returns nil if caches are invalid.
     private func cachedPreparedQuery(for query: String) -> OPA.Engine.PreparedQuery? {
         guard self.bundleGeneration == self.preparedBundleGeneration,
             self.queryGeneration == self.preparedQueryGeneration
@@ -262,24 +262,29 @@ extension OPA.Runtime {
         return self.preparedQueries[query]
     }
 
-    // Nonisolated entry point — no actor hop for the evaluation itself.
+    /// `decision` generates a policy decision from a query, using
+    /// a provided input value.
+    ///
+    /// Note: Once a query has been added with `addQuery`, or by calling
+    /// `decision`, it will automatically be prepared and cached as
+    /// bundles are updated, unless removed by a call to `removeQuery`.
     public nonisolated func decision(
-        _ entrypoint: String,
+        _ query: String,
         input: AST.RegoValue,
         decisionID: String = UUID().uuidString
     ) async throws -> OPA.DecisionResult {
         // Fast path: one brief actor hop to read the cache, then evaluate off-actor.
-        if let pq = await self.cachedPreparedQuery(for: entrypoint) {
+        if let pq = await self.cachedPreparedQuery(for: query) {
             let result = try await pq.evaluate(input: input)
             return OPA.DecisionResult(id: decisionID, result: result)
         }
 
         // Slow path: prepare (actor hop + mutation), then evaluate off-actor.
-        let pqs = try await self.prepare(adhocQueries: [entrypoint])
-        guard let pq = pqs[entrypoint] else {
+        let pqs = try await self.prepare(adhocQueries: [query])
+        guard let pq = pqs[query] else {
             throw RuntimeError(
                 code: .bundleUnpreparedError,
-                message: "Could not find prepared query for entrypoint \(entrypoint)")
+                message: "Could not find prepared query for entrypoint \(query)")
         }
         let result = try await pq.evaluate(input: input)
         return OPA.DecisionResult(id: decisionID, result: result)
@@ -469,13 +474,10 @@ extension OPA.Runtime {
     ///
     /// Declared `nonisolated` so that multiple fetches can proceed
     /// concurrently in a task group without serializing on the actor.
-    /// Only accesses `self.httpClient`, which is `nonisolated let`.
+    /// Only accesses `self.httpClient`, which is also `nonisolated`.
     ///
-    /// bundleLoaders accepts types implementing Bundle loader, in
-    /// priority order to be tried against the config.
-    /// If no loaders are found that can process the bundle, then
-    /// we return an error result. This allows splicing in custom
-    /// bundle loaders later on that use the "plugins" config section.
+    /// It will use the list of BundleLoader types configured at init
+    /// for the Runtime.
     nonisolated func getBundleLoader(
         name: String,
         config: OPA.Config
