@@ -3,6 +3,7 @@ import AsyncHTTPClient
 import Config
 import Foundation
 import Rego
+import RegoExtensions
 import SWCompression
 
 // TODO: Provide a rough equivalent of hooks.Hooks, once we have appropriate infrastructure to warrant it.
@@ -54,6 +55,10 @@ extension OPA {
 
         /// The ID this Runtime instance uses to identify itself in logs and traces.
         public nonisolated let instanceID: String
+
+        /// A set of additional builtins that will be provided to the Engine
+        /// during query preparation.
+        public nonisolated let customBuiltins: [String: Rego.Builtin]
 
         /// HTTP client for network operations (bundle downloads, etc.).
         /// Declared `nonisolated` because `HTTPClient` is `Sendable` and
@@ -120,6 +125,8 @@ extension OPA {
         ///   - bundleLoaders: BundleLoader types to use, in priority order.
         ///   - configProvider: An optional config provider. If nil and `config.discovery`
         ///     is set, a ``DiscoveryConfigProvider`` is created automatically.
+        ///   - customBuiltins: A dictionary of custom `Rego.Builtin` implementations
+        ///     to use with the `OPA.Engine` at query preparation time.
         public init(
             config: OPA.Config,
             queries: [String]? = nil,
@@ -129,11 +136,14 @@ extension OPA {
                 OPA.DiskBasedBundleLoader.self,
                 OPA.RESTClientBundleLoader.self,
             ],
-            configProvider: (any OPA.ConfigProvider)? = nil
+            configProvider: (any OPA.ConfigProvider)? = nil,
+            customBuiltins: [String: Rego.Builtin] = [:]
         ) throws {
             self.bootConfig = config
             self.activeConfig = config
             self.instanceID = instanceID
+            self.customBuiltins = SDKBuiltinFuncs.sdkDefaultBuiltins.merging(
+                customBuiltins, uniquingKeysWith: { (_, new) in new })
             self.httpClient = httpClient ?? HTTPClient.shared
             self.bundleLoaders = bundleLoaders
             self.preparedQueries = [:]
@@ -222,13 +232,19 @@ extension OPA.Runtime {
             // Prepare any queries not already in the cache.
             let unprepared = self.queries.subtracting(self.preparedQueries.keys)
             if !unprepared.isEmpty {
-                let pq = try await Self.prepareQueries(bundles: self.bundles, queries: unprepared)
+                let pq = try await Self.prepareQueries(
+                    bundles: self.bundles,
+                    queries: unprepared,
+                    customBuiltins: self.customBuiltins)
                 self.preparedQueries.merge(pq, uniquingKeysWith: { (_, new) in new })
             }
             self.preparedQueryGeneration = queryGen
         default:
             // Rebuild all queries if bundles are out of date.
-            let pq = try await Self.prepareQueries(bundles: self.bundles, queries: self.queries)
+            let pq = try await Self.prepareQueries(
+                bundles: self.bundles,
+                queries: self.queries,
+                customBuiltins: self.customBuiltins)
 
             // Commit results. Only mark as "caught up" to the generation
             // we snapshotted — if a newer generation arrived mid-loop,
@@ -244,9 +260,10 @@ extension OPA.Runtime {
     /// Runs outside actor isolation to avoid mutating-async-on-actor restrictions.
     private nonisolated static func prepareQueries(
         bundles: [String: OPA.Bundle],
-        queries: Set<String>
+        queries: Set<String>,
+        customBuiltins: [String: Rego.Builtin] = [:]
     ) async throws -> [String: OPA.Engine.PreparedQuery] {
-        var engine = OPA.Engine(bundles: bundles, capabilities: nil, customBuiltins: [:])
+        var engine = OPA.Engine(bundles: bundles, capabilities: nil, customBuiltins: customBuiltins)
         var pq: [String: OPA.Engine.PreparedQuery] = Dictionary(minimumCapacity: queries.count)
         for query in queries {
             pq[query] = try await engine.prepareForEvaluation(query: query)

@@ -45,7 +45,7 @@ import Yams // https://github.com/jpsim/Yams
 import Foundation
 import SwiftOPASDK
 
-/// Fetch config from YAML file on-disk.
+// Fetch config from YAML file on-disk.
 let configURL = URL(fileURLWithPath: "config.yaml", relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath))
 let config = try YAMLDecoder().decode(OPA.Config.self, from: Data(contentsOf: configURL)
 
