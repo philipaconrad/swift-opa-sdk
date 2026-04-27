@@ -4,14 +4,23 @@ import Rego
 
 extension OPA {
     /// DiskBasedBundleLoader abstracts over loading bundles
-    /// from on-disk folders tarball files.
+    /// from on-disk folders and tarball files.
+    ///
+    /// `file://` URL paths are assumed to be absolute paths
+    /// from the filesystem root, as per the RFC 8089 spec.
+    /// (See: https://datatracker.ietf.org/doc/rfc8089/)
     ///
     /// ## Limitations
     ///
     /// - Bundle signature verification is not yet implemented.
     public struct DiskBasedBundleLoader: BundleLoader {
+        /// The `bundle` resource name from the config.
         public let name: String
+
+        /// The file URL of the folder or tarball on disk.
         public let fetchURL: URL
+
+        /// Polling configuration.
         public let polling: PollingConfig?
 
         public init(config: OPA.Config, bundleResourceName: String) throws {
@@ -70,7 +79,8 @@ extension OPA {
             self.polling = discovery.downloaderConfig.polling
         }
 
-        // If the resource is a file URL, we can load it.
+        /// Compatibility check against the OPA bundle config section.
+        /// This check only returns `true` if the `url` field is a `file://` URL.
         public static func compatibleWithConfig(config: OPA.Config, bundleResourceName: String) -> Bool {
             guard let resource = config.bundles[bundleResourceName] else {
                 return false
@@ -79,6 +89,8 @@ extension OPA {
             return (URL(string: resource.resource ?? "")?.scheme == "file")
         }
 
+        /// Compatibility check against the OPA discovery config section.
+        /// This check only returns `true` if the `url` field is a `file://` URL.
         public static func compatibleWithDiscoveryConfig(config: OPA.Config) -> Bool {
             guard let discovery = config.discovery else {
                 return false
@@ -86,6 +98,8 @@ extension OPA {
             return URL(string: discovery.resource)?.scheme == "file"
         }
 
+        /// Loads a bundle from disk, returning either a successfully parsed
+        /// OPA bundle, or an error.
         public func load() async -> Result<Bundle, any Swift.Error> {
             var isDirectory: ObjCBool = false
             if FileManager.default.fileExists(atPath: self.fetchURL.path, isDirectory: &isDirectory) {

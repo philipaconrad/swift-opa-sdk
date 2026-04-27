@@ -7,21 +7,93 @@ import Rego
 
 extension OPA {
     /// RESTClientBundleLoader abstracts over OPA's HTTP-based bundle sources.
+    /// It supports both [`ETag` bundle caching][bundle-caching], and
+    /// [HTTP long-polling][bundle-long-polling].
+    ///
+    /// ## `ETag` Bundle Caching
+    ///
+    /// When a bundle is successfully fetched and parsed from the bundle
+    /// server, the loader will cache both the parsed bundle and any `ETag`
+    /// header value that was provided in the server's response. This
+    /// ETag value is then sent in the `ETag` header on future requests.
+    ///
+    /// If the server returns a `304 Not Modified` response, the loader
+    /// will return the last successfully parsed bundle from the cache.
+    ///
+    /// The ETag value is only updated when a new bundle is successfully
+    /// fetched, which allows the remote server to avoid sending the same
+    /// bundle over the wire on each polling attempt.
+    ///
+    /// ## HTTP Long-Polling Support
+    ///
+    /// The loader provides a `Prefer` header to the bundle server on each
+    /// request, including an optional `wait` parameter in the header value
+    /// if the bundle resource configuration includes a non-zero
+    /// `polling.long_polling_timeout_seconds` value.
+    ///
+    /// If the server supports long-polling, it will reply with a special
+    /// `Content-Type` header. The loader checks every server response for
+    /// this header value, and when detected, enables long-polling for the
+    /// next request.
+    ///
+    /// The server then will hold the connection open for up to the duration
+    /// in seconds specified in the `Prefer` header's `wait` parameter, and
+    /// then will reply with either a bundle, the `304 Not Modified`
+    /// response, or an error.
+    ///
+    /// The `OPA.Runtime` can inspect `HTTPBundleLoader` types like this one
+    /// to see if long-polling has been enabled, and will disable the normal
+    /// polling delays derived from the `polling.min_delay_seconds` and
+    /// `polling.max_delay_seconds` OPA config fields (because it assumes
+    /// that the loader has already waited some duration from the mechanics
+    /// of normal long-polling).
+    ///
+    /// If the server ever stops returning the special `Content-Type` header
+    /// in its responses, the loader will automatically disable long-polling,
+    /// and will switch back to normal polling.
     ///
     /// ## Limitations
     ///
     /// - Bundle persistence for downloaded bundles is not yet implemented.
     /// - Bundle signature verification is not yet implemented.
+    ///
+    ///    [bundle-caching]: https://www.openpolicyagent.org/docs/management-bundles#caching
+    ///    [bundle-long-polling]: https://www.openpolicyagent.org/docs/management-bundles#http-long-polling
     public struct RESTClientBundleLoader: HTTPBundleLoader, BundleLoader {
+        /// The `bundle` resource name from the config.
         public let name: String
+
+        /// The file URL of the folder or tarball on disk.
         public let fetchURL: URL
+
+        /// `ETag` HTTP header value from the last successfully fetched/parsed bundle.
         public private(set) var etag: String
+
+        /// Control plane service config used.
         public let serviceConfig: ServiceConfig
+
+        /// Bundle resource config used.
         public let bundleConfig: BundleSourceConfig
+
+        /// A dictionary of custom header key/value pairs that will be
+        /// set on each request.
+        ///
+        /// Note: These headers are set *before* credentials handlers,
+        /// `ETag` caching, and long-polling headers are applied. Any
+        /// conflicting header values will be overwritten.
         public let customHeaders: [String: String]
+
+        /// HTTPClient instance to use for requests.
         public var httpClient: HTTPClient
+
+        /// Polling configuration.
         public let polling: PollingConfig?
+
+        /// The cached instance of the last successfully fetched and parsed bundle.
         private var lastBundle: OPA.Bundle?
+
+        /// A state flag for tracking whether the next request from this
+        /// loader will be attempting a long-polling request or not.
         private var longPollingEnabled: Bool
 
         public init(
@@ -123,7 +195,9 @@ extension OPA {
             self.longPollingEnabled = false
         }
 
-        // If the resource is for a compatible bundle source, we can load it.
+        /// Compatibility check against the OPA bundle config section.
+        /// If the resource is of a supported credential type, this check returns `true`.
+        /// Currently, supported credential types are: (default no auth), Bearer auth.
         public static func compatibleWithConfig(config: Config, bundleResourceName: String) -> Bool {
             guard let resource = config.bundles[bundleResourceName] else {
                 return false
@@ -145,6 +219,8 @@ extension OPA {
             }
         }
 
+        /// Compatibility check against the OPA discovery config section.
+        /// This check has the same constraints as the `compatibleWithConfig` check.
         public static func compatibleWithDiscoveryConfig(config: Config) -> Bool {
             guard let discovery = config.discovery else {
                 return false
@@ -165,8 +241,11 @@ extension OPA {
             }
         }
 
-        // Adjust headers, then call the appropriate backend for fetching the bundle.
-        // Mutation required for Etag header handling (also requires caching last good bundle).
+        /// Loads a bundle from the remote source, returning either a
+        /// successfully parsed OPA bundle, or an error.
+        ///
+        /// This method adjusts request headers based on the credential type,
+        /// `ETag` caching, and long-polling support of the bundle server.
         public mutating func load() async -> Result<OPA.Bundle, any Swift.Error> {
             let headers =
                 (self.serviceConfig.headers ?? [:]).merging(
