@@ -32,6 +32,8 @@ let package = Package(
             dependencies: [
                 .product(name: "SwiftOPA", package: "swift-opa"),
                 .product(name: "Yams", package: "Yams"),
+                "Config",
+                "RegoExtensions",
                 "Runtime",
             ]
         ),
@@ -43,9 +45,18 @@ let package = Package(
             path: "Sources/Config"
         ),
         .target(
+            name: "RegoExtensions",
+            dependencies: [
+                .product(name: "SwiftOPA", package: "swift-opa"),
+                .product(name: "Yams", package: "Yams"),
+            ],
+            path: "Sources/RegoExtensions"
+        ),
+        .target(
             name: "Runtime",
             dependencies: [
                 "Config",
+                "RegoExtensions",
                 .product(name: "AsyncHTTPClient", package: "async-http-client"),
                 .product(name: "SwiftOPA", package: "swift-opa"),
                 .product(name: "SWCompression", package: "SWCompression"),
@@ -63,7 +74,7 @@ let package = Package(
         ),
         .testTarget(
             name: "RegoExtensionTests",
-            dependencies: ["SwiftOPASDK"]
+            dependencies: ["RegoExtensions"]
         ),
         .testTarget(
             name: "RuntimeTests",

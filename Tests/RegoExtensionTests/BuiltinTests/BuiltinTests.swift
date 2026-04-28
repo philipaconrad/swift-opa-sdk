@@ -3,7 +3,7 @@ import Foundation
 import Testing
 
 @testable import Rego
-@testable import SwiftOPASDK
+@testable import RegoExtensions
 
 extension Tag {
     @Tag public static var builtins: Self
@@ -23,7 +23,7 @@ struct BuiltinTests {
             name: String,
             args: [AST.RegoValue],
             expected: Result<AST.RegoValue, Error>,
-            builtinRegistry: BuiltinRegistry = BuiltinRegistry(builtins: SDKBuiltinFuncs.getSDKDefaultBuiltins())
+            builtinRegistry: BuiltinRegistry = BuiltinRegistry(builtins: getSDKDefaultBuiltins())
         ) {
             self.description = description
             self.name = name
@@ -44,7 +44,7 @@ struct BuiltinTests {
 
     static func testBuiltin(
         tc: TestCase,
-        builtinRegistry: BuiltinRegistry = BuiltinRegistry(builtins: SDKBuiltinFuncs.getSDKDefaultBuiltins())
+        builtinRegistry: BuiltinRegistry = BuiltinRegistry(builtins: getSDKDefaultBuiltins())
     )
         async throws
     {
@@ -106,7 +106,7 @@ struct BuiltinTests {
         wantArgs: String? = nil,
         generateNumberOfArgsTest: Bool = false,
         numberAsInteger: Bool = false,
-        builtinRegistry: BuiltinRegistry = BuiltinRegistry(builtins: SDKBuiltinFuncs.getSDKDefaultBuiltins())
+        builtinRegistry: BuiltinRegistry = BuiltinRegistry(builtins: getSDKDefaultBuiltins())
     ) -> [BuiltinTests.TestCase] {
         let argValues: [String: RegoValue] = [
             "array": [1, 2, 3], "boolean": false, "null": .null, (numberAsInteger ? "number[integer]" : "number"): 123,
@@ -157,7 +157,7 @@ struct BuiltinTests {
     static func generateNumberOfArgumentsFailureTests(
         builtinName: String,
         sampleArgs: [RegoValue],
-        builtinRegistry: BuiltinRegistry = BuiltinRegistry(builtins: SDKBuiltinFuncs.getSDKDefaultBuiltins())
+        builtinRegistry: BuiltinRegistry = BuiltinRegistry(builtins: getSDKDefaultBuiltins())
     ) -> [BuiltinTests.TestCase] {
         var tests: [BuiltinTests.TestCase] = []
         // Only generate "too few" test case when expected number of arguments is > 0
@@ -227,4 +227,16 @@ private func requireThrows<E: Error & Sendable, R>(
         #expect(Bool(false), "Expected \(errorType) but got \(type(of: error)). \(comment)")
         fatalError("This should never be reached")
     }
+}
+
+/// Returns the merged set of builtins for this library and Swift OPA.
+private func getSDKDefaultBuiltins() -> [String: Rego.Builtin] {
+    let opaDefaultRegistry = BuiltinRegistry.defaultRegistry
+    let opaDefaultBuiltins = BuiltinRegistry.getSupportedBuiltinNames().reduce(into: [String: Builtin]()) {
+        dict, key in
+        dict[key] = opaDefaultRegistry[key]
+    }
+
+    // Merge with upstream Swift OPA's builtins, keeping ours on conflicts.
+    return SDKBuiltinFuncs.sdkDefaultBuiltins.merging(opaDefaultBuiltins, uniquingKeysWith: { sdk, _ in sdk })
 }
