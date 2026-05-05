@@ -5,7 +5,9 @@ import SWCompression
 
 extension OPA.Bundle {
     /// Builds an ``OPA.Bundle`` from a directory.
-    public static func decodeFromDirectory(fromDir: URL) throws -> OPA.Bundle {
+    /// Bundle verification happens automatically if a `.signatures.json` file is found at the root.
+    public static func decodeFromDirectory(fromDir: URL, excludeFromVerification: [String]? = nil) throws -> OPA.Bundle
+    {
         guard let isDir = try fromDir.resourceValues(forKeys: [.isDirectoryKey]).isDirectory, isDir else {
             throw OPA.Bundle.LoadError.unsupported("URL was not a directory path")
         }
@@ -18,6 +20,17 @@ extension OPA.Bundle {
         var planFiles: [BundleFile] = []
         var manifest: OPA.Manifest?
         var data: AST.RegoValue = AST.RegoValue.object([:])
+
+        // See if a signatures file exists, and load it if so.
+        var signatures: OPA.Bundle.SignaturesConfig?
+        let signaturesURL = fromDir.appendingPathComponent(".signatures.json")
+        do {
+            signatures = try OPA.Bundle.SignaturesConfig(fromJSON: Data(contentsOf: signaturesURL))
+        } catch CocoaError.fileReadNoSuchFile {
+            // No signatures file, ignore error and move on.
+        } catch {
+            throw OPA.Bundle.LoadError.dataParseError(URL(string: "/.signatures.json")!, error)
+        }
 
         // We create an emumerator that filters for only files/folders.
         guard
@@ -38,9 +51,7 @@ extension OPA.Bundle {
         // File contents are lazily loaded.
         for case let fileURL as URL in enumerator {
             // Skip directories, only process files.
-            guard
-                let resourceValues = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
-                resourceValues.isRegularFile == true
+            guard (try? fileURL.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
             else { continue }
 
             // Get the relative path from the root directory as a string
@@ -182,4 +193,24 @@ private func formatBundlePath(_ path: String) -> String {
         return "/" + path
     }
     return path
+}
+
+/// Lazily
+func findFile(named fileName: String, in directory: URL) -> URL? {
+    let fileManager = FileManager.default
+
+    guard
+        let contents = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: Array(keys),
+            options: []  // ← don't skip hidden files; our target IS hidden
+        )
+    else { continue }
+
+    for case let fileURL as URL in enumerator {
+        if fileURL.lastPathComponent == fileName {
+            return fileURL
+        }
+    }
+    return nil
 }

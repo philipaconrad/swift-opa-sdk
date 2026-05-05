@@ -21,6 +21,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.81.0"),
         .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.30.0"),
         .package(url: "https://github.com/swift-server/async-http-client", from: "1.21.0"),
+        .package(url: "https://github.com/vapor/jwt-kit.git", from: "5.0.0"),
         // TODO: Swap for whatever our solution ends up being. This is not the most recent commit,
         // but it is the last one that supports macOS 13 as a target.
         // Placeholder until we decide how to handle tar.gz wrangling:
@@ -63,6 +64,7 @@ let package = Package(
                 .product(name: "SwiftOPA", package: "swift-opa"),
                 .product(name: "SWCompression", package: "SWCompression"),
                 .product(name: "Crypto", package: "swift-crypto"),
+                .product(name: "JWTKit", package: "jwt-kit"),
                 .product(name: "Yams", package: "Yams"),
             ],
             path: "Sources/Runtime"
