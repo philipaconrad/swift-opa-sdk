@@ -118,7 +118,8 @@ extension OPA {
             )
             self.keys = keys
 
-            try self.validate()
+            let skipValidation = decoder.userInfo[.skipValidationOPAConfig] as? Bool ?? false
+            if !skipValidation { try self.validate() }
         }
 
         // MARK: - Encoder
@@ -190,4 +191,8 @@ extension OPA {
 
         init?(intValue: Int) { nil }
     }
+}
+
+extension CodingUserInfoKey {
+    static let skipValidationOPAConfig = CodingUserInfoKey(rawValue: "skipValidationOPAConfig")!
 }

@@ -134,7 +134,8 @@ extension OPA {
             let isFileURL = self.resource.flatMap(URL.init(string:))?.scheme == "file"
             guard !self.service.isEmpty || isFileURL else {
                 throw ConfigError(
-                    code: .internalError, message: "No service config or file:// URL was provided for bundle config.")
+                    code: .referenceNotFound,
+                    message: "No service config or file:// URL was provided for bundle config.")
             }
         }
 
@@ -145,7 +146,7 @@ extension OPA {
             // Prevent bundle referencing a non-existent service.
             guard self.service.isEmpty || services[self.service] != nil else {
                 throw ConfigError(
-                    code: .internalError,
+                    code: .referenceNotFound,
                     message:
                         "Bundle config for '\(name)' references non-existent service: '\(self.service)'"
                 )
@@ -153,7 +154,7 @@ extension OPA {
             // If no service specified, require a file:// URL to load from disk.
             guard !self.service.isEmpty || (URL(string: self.resource ?? "")?.scheme == "file") else {
                 throw ConfigError(
-                    code: .internalError,
+                    code: .referenceNotFound,
                     message:
                         "Bundle config for '\(name)' has no service config or file:// URL resource config. \(self.resource ?? "(nil)")"
                 )

@@ -372,7 +372,7 @@ extension OPA {
                     return .failure(error)
                 }
             case .oauth2(let loader):
-                self.logger.info("Preparing bundle request with OAuth2 client credentials authentication")
+                self.logger.debug("Preparing bundle request with OAuth2 client credentials authentication")
                 do {
                     try await loader.prepare(
                         req: &httpRequest,
@@ -411,7 +411,7 @@ extension OPA {
                     configuration: self.httpClientConfig,
                     backgroundActivityLogger: nil,
                     { httpClient in
-                        self.logger.info("Attempting to fetch bundle from URL: \(self.fetchURL)")
+                        self.logger.debug("Attempting to fetch bundle from URL: \(self.fetchURL)")
                         let response =
                             if longPollingTA > 0 {
                                 try await httpClient.execute(httpRequest, timeout: .seconds(longPollingTA))

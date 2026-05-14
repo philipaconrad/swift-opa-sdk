@@ -256,7 +256,9 @@ extension OPA {
 
             // JSON round-trip: RegoValue -> Data -> OPA.Config
             let jsonData = try JSONEncoder().encode(unwrapped)
-            return try JSONDecoder().decode(OPA.Config.self, from: jsonData)
+            let decoder = JSONDecoder()
+            decoder.userInfo[.skipValidationOPAConfig] = true
+            return try decoder.decode(OPA.Config.self, from: jsonData)
         }
 
         // MARK: - Config Merging
@@ -324,4 +326,8 @@ extension OPA {
             return value
         }
     }
+}
+
+extension CodingUserInfoKey {
+    static let skipValidationOPAConfig = CodingUserInfoKey(rawValue: "skipValidationOPAConfig")!
 }
