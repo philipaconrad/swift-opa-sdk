@@ -47,7 +47,14 @@ extension OPA {
         /// when a config provider produces new configuration.
         public nonisolated let bootConfig: OPA.Config
 
+        /// The active configuration this Runtime is using.
         public private(set) var activeConfig: OPA.Config
+
+        /// Result of the last config load attempt.
+        public private(set) var lastestConfig: Result<OPA.Config, any Swift.Error>?
+
+        /// Monotonic counter incremented on every config change.
+        private var configGeneration: UInt64 = 0
 
         /// Optional config provider (e.g. discovery) that produces
         /// configuration updates over time. Built at init from the boot
@@ -346,17 +353,17 @@ extension OPA.Runtime {
                 group.addTask {
                     defer { configContinuation.finish() }
 
+                    var currentConfigGeneration = await self.configGeneration
                     while !Task.isCancelled {
                         let result = await provider.load()
 
-                        switch result {
-                        case .success(let newConfig):
-                            self.logger.debug("Config provider returned a new config.")
-                            await self.updateActiveConfig(config: newConfig)
-                        case .failure(let error):
-                            self.logger.error("Config provider returned an error: \(error)")
+                        // Attempt to update the active config. Only publish result on change.
+                        await self.updateConfig(result: result)
+                        let newConfigGeneration = await self.configGeneration
+                        if currentConfigGeneration != newConfigGeneration {
+                            configContinuation.yield(result)
                         }
-                        configContinuation.yield(result)
+                        currentConfigGeneration = newConfigGeneration
 
                         let longPollingEnabled: Bool = {
                             if let httpProvider = provider as? any OPA.HTTPConfigProvider {
@@ -495,13 +502,32 @@ extension OPA.Runtime {
 
 extension OPA.Runtime {
     /// Updates the active config on the actor.
+    /// Tracks state of last config polling attempt.
     ///
     /// Called from the config polling loops after an off-actor fetch completes.
     /// The actor hop is brief.
-    private func updateActiveConfig(
-        config: OPA.Config
+    private func updateConfig(
+        result: Result<OPA.Config, any Swift.Error>
     ) {
-        self.activeConfig = config
+        // Deduplicate — skip if the result hasn't meaningfully changed.
+        let existing = self.lastestConfig
+        switch (existing, result) {
+        case (.success(let old), .success(let new))
+        where old == new:
+            self.logger.debug("Config not modified.")
+            return
+        case (.failure(let old), .failure(let new))
+        where old.localizedDescription == new.localizedDescription:
+            self.logger.debug("Config still failed to load with error: \(new).")
+            return
+        case (_, .success(let new)):
+            self.activeConfig = new  // Set new active config.
+            self.configGeneration += 1
+        default:
+            self.logger.debug("Updating config.")
+            break
+        }
+        self.lastestConfig = result
     }
 }
 
