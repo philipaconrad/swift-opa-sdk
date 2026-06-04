@@ -15,7 +15,7 @@ struct RuntimeETagIntegrationTests {
             try await withRunningRuntime(server: server, configJSON: configJSON) { rt in
                 try await Task.sleep(for: .seconds(3))
 
-                let latestStorage = await rt.bundleStorage
+                let latestStorage = rt.bundleStorage
                 guard case .success = latestStorage["test"] else {
                     Issue.record("Bundle 'test' should still be .success after polling")
                     return
@@ -34,7 +34,7 @@ struct RuntimeETagIntegrationTests {
         try await withBundleServer(etag: "\"rt-v1\"") { server in
             let configJSON = makeETagTestConfigWithPolling(baseURL: server.baseURL)
             try await withRunningRuntime(server: server, configJSON: configJSON) { rt in
-                let firstBundle = await rt.bundles["test"]
+                let firstBundle = rt.bundles["test"]
                 #expect(firstBundle != nil)
 
                 server.state.bundleData = try makeBundleData()
@@ -42,7 +42,7 @@ struct RuntimeETagIntegrationTests {
 
                 try await Task.sleep(for: .seconds(3))
 
-                let updatedBundle = await rt.bundles["test"]
+                let updatedBundle = rt.bundles["test"]
                 #expect(updatedBundle != nil)
                 #expect(updatedBundle != firstBundle, "Runtime should have picked up the new bundle")
             }
@@ -302,7 +302,7 @@ func withRunningRuntime(
 
     let _ = await waitForBundleLoad(rt: rt, name: bundleName, timeout: .seconds(5))
 
-    let storage = await rt.bundleStorage
+    let storage = rt.bundleStorage
     guard case .success = storage[bundleName] else {
         Issue.record("Expected bundle '\(bundleName)' to be .success, got \(String(describing: storage[bundleName]))")
         return

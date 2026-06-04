@@ -157,7 +157,7 @@ struct ParallelBundleLoadingTests {
     ) async throws {
         let deadline = ContinuousClock.now + timeout
         while ContinuousClock.now < deadline {
-            let count = await runtime.bundleStorage.count
+            let count = runtime.bundleStorage.count
             if count >= expectedCount { return }
             try await Task.sleep(for: .milliseconds(100))
         }
@@ -246,7 +246,7 @@ struct ParallelBundleLoadingTests {
         expectedFailureNames: Set<String>
     ) async throws {
         let totalExpected = expectedSuccessNames.count + expectedFailureNames.count
-        let storage = await rt.bundleStorage
+        let storage = rt.bundleStorage
 
         #expect(
             storage.count == totalExpected,
@@ -274,7 +274,7 @@ struct ParallelBundleLoadingTests {
             }
         }
 
-        let successBundles = await rt.bundles
+        let successBundles = rt.bundles
         #expect(
             successBundles.count == expectedSuccessNames.count,
             "Expected \(expectedSuccessNames.count) successful bundle(s), got \(successBundles.count)")

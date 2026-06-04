@@ -41,11 +41,11 @@ struct RuntimeDiscoveryETagTests {
         }
 
         try await waitForCondition("activeConfig reflects bundles", timeout: .seconds(15)) {
-            let active = await runtime.activeConfig
+            let active = runtime.activeConfig
             return tc.expectedSuccessBundles.allSatisfy { active.bundles[$0] != nil }
         }
 
-        let active = await runtime.activeConfig
+        let active = runtime.activeConfig
         #expect(active.discovery != nil, "[\(tc.description)] discovery retained")
 
         try await waitForBundleCount(runtime, atLeast: tc.expectedSuccessBundles.count)
@@ -76,9 +76,9 @@ struct RuntimeDiscoveryETagTests {
 
         try await waitForRequests(server, prefix: "/discovery", atLeast: 2, timeout: .seconds(10))
 
-        let active = await runtime.activeConfig
+        let active = runtime.activeConfig
         #expect(active.bundles.isEmpty, "no bundles when discovery fails")
-        let storage = await runtime.bundleStorage
+        let storage = runtime.bundleStorage
         #expect(storage.isEmpty, "no loaders on discovery failure")
     }
 
@@ -95,7 +95,7 @@ struct RuntimeDiscoveryETagTests {
         }
 
         try await waitForCondition("activeConfig reflects discovered bundles", timeout: .seconds(15)) {
-            let active = await runtime.activeConfig
+            let active = runtime.activeConfig
             return active.bundles["good"] != nil && active.bundles["bad"] != nil
         }
 
@@ -182,7 +182,7 @@ struct RuntimeDiscoveryLongPollingTests {
             try await waitForRequests(
                 server, prefix: "/discovery", atLeast: tc.minDiscoveryRequests, timeout: .seconds(30)
             )
-            let storage = await runtime.bundleStorage
+            let storage = runtime.bundleStorage
             #expect(storage.isEmpty, "no bundles expected; got \(storage.keys)")
         }
 
@@ -292,7 +292,7 @@ struct RuntimeDiscoveryLongPollingStateTransitionTests {
         }
 
         try await waitForCondition("activeConfig reflects b1", timeout: .seconds(15)) {
-            await runtime.activeConfig.bundles["b1"] != nil
+            runtime.activeConfig.bundles["b1"] != nil
         }
         try await waitForRequests(server, prefix: "/discovery", atLeast: 2)
 
@@ -300,7 +300,7 @@ struct RuntimeDiscoveryLongPollingStateTransitionTests {
         #expect((repoll.headerValue(for: "prefer") ?? "").contains("wait=30"))
         #expect(repoll.headerValue(for: "if-none-match") == "\"combo-v1\"")
         #expect(
-            await runtime.activeConfig.bundles["b1"] != nil,
+            runtime.activeConfig.bundles["b1"] != nil,
             "active config should survive 304")
     }
 }
@@ -453,7 +453,7 @@ func waitForBundleCount(
     _ runtime: OPA.Runtime, atLeast n: Int, timeout: Duration = .seconds(15)
 ) async throws {
     try await waitForCondition("bundle count >= \(n)", timeout: timeout) {
-        await runtime.bundleStorage.count >= n
+        runtime.bundleStorage.count >= n
     }
 }
 

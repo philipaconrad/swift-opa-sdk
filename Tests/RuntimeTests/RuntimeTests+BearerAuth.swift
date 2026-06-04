@@ -101,7 +101,7 @@ struct RuntimeHTTPBundleBearerAuthTests {
         defer { backgroundFetchTask.cancel() }
 
         let _ = await waitForBundleLoad(rt: rt, name: "test", timeout: .seconds(1))
-        let bundleStorage = await rt.bundleStorage
+        let bundleStorage = rt.bundleStorage
         let bundleResult = try #require(
             bundleStorage.first, "Expected exactly 1 bundle, got \(bundleStorage.count)")
         #expect(bundleStorage.count == 1, "Expected exactly 1 bundle, got \(bundleStorage.count)")

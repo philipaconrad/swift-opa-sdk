@@ -33,7 +33,7 @@ public func makeExampleBundle(
 ) throws -> OPA.Bundle {
     TestLogging.ensureBootstrapped()
     let id = UUID().uuidString
-    let manifest = manifest ?? OPA.Manifest(revision: UUID().uuidString, roots: ["/\(id)"])
+    let manifest = manifest ?? OPA.Manifest(revision: UUID().uuidString, roots: ["/\(id)", "foo"])
     let planFiles =
         planFiles ?? [
             Rego.BundleFile(
@@ -84,7 +84,7 @@ public func waitForBundleLoad(
     TestLogging.ensureBootstrapped()
     let deadline = ContinuousClock.now + timeout
     while ContinuousClock.now < deadline {
-        if let result = await rt.bundleStorage[name],
+        if let result = rt.bundleStorage[name],
             predicate?(result) ?? true
         {
             return result

@@ -112,7 +112,7 @@ struct RuntimeHTTPBundleOAuth2Tests {
         defer { backgroundFetchTask.cancel() }
 
         let _ = await waitForBundleLoad(rt: rt, name: "test", timeout: .seconds(5))
-        let bundleStorage = await rt.bundleStorage
+        let bundleStorage = rt.bundleStorage
         let bundleResult = try #require(bundleStorage["test"], "Expected bundle 'test' to be present")
         let _ = try requireBundleLoadSuccess(bundleResult, context: "happy-path OAuth2 bundle load")
 

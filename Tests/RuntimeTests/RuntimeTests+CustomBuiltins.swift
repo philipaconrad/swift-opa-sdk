@@ -66,7 +66,7 @@ struct RuntimeCustomBuiltinsTests {
         defer { backgroundFetchTask.cancel() }
         let _ = await waitForBundleLoad(rt: rt, name: "test", timeout: .seconds(1))
 
-        let bundleStorage = await rt.bundleStorage
+        let bundleStorage = rt.bundleStorage
         #expect(bundleStorage.count == 1, "Expected exactly 1 succesful bundle load, got \(bundleStorage.count)")
         #expect(
             bundleStorage.allSatisfy({ (key: String, value: Result<OPA.Bundle, any Error>) in

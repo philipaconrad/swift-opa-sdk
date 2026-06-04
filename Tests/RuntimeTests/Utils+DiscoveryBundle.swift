@@ -19,7 +19,14 @@ func makeDiscoveryBundle(
         nested = .object([.string(segment): nested])
     }
 
-    let roots = segments.isEmpty ? [""] : [segments.joined(separator: "/")]
+    // Roots must cover the bundle's data tree (`configDataPath`). Plan
+    // names must also lie under one of the bundle's declared roots, so
+    // we ensure the decision path is added as a root too.
+    var roots = segments.isEmpty ? [""] : [segments.joined(separator: "/")]
+    let planRoot = decisionPath.trimmingCharacters(in: ["/"])
+    if !planRoot.isEmpty, !roots.contains(planRoot) {
+        roots.append(planRoot)
+    }
     let manifest = OPA.Manifest(revision: UUID().uuidString, roots: roots)
 
     func generateStmtsForPath(path: String) -> ([String], [String]) {
