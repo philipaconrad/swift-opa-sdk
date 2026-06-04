@@ -24,24 +24,13 @@ extension OPA {
     ///
     /// ## Concurrency
     ///
-    /// `Runtime` is a `final class` marked `@unchecked Sendable`. Internal
-    /// mutable state is partitioned into three groups, each guarded by its
-    /// own `Mutex`:
-    ///
-    ///  - **Config state** (`configState`): active config, last-attempt
-    ///    result, generation counter, and the optional config provider.
-    ///  - **Bundle state** (`bundleState`): per-bundle load results, the
-    ///    bundle generation counter, and a cache of successful bundles.
-    ///  - **Query state** (`queryState`): the registered query set,
-    ///    prepared queries, and the generation snapshots that were used
-    ///    to prepare them.
-    ///
-    /// Lock-order discipline: when more than one lock is involved in a
-    /// single operation (only `prepare()` and `decision()` need this),
-    /// `bundleState` is acquired before `queryState`, and the locks are
-    /// never held simultaneously across an `await`. All long-running
-    /// async work (bundle/config fetches, query preparation, evaluation)
-    /// runs without any lock held.
+    /// `Runtime` is a `final class` that conforms to `Sendable`. All
+    /// internal mutable state lives in a single `State` struct guarded by
+    /// one `Mutex<State>`. The lock is never held across an `await`, so
+    /// all long-running async work (bundle/config fetches, query
+    /// preparation, evaluation) runs lock-free; the lock is taken only
+    /// for short, synchronous critical sections that read or publish
+    /// snapshots and bump generation counters.
     ///
     /// ## Lifecycle
     ///
@@ -64,7 +53,7 @@ extension OPA {
     /// You can also use the Runtime without calling `run()` — it will
     /// function with whatever bundles were loaded at init time, but
     /// config providers and bundle polling will not be active.
-    public final class Runtime: @unchecked Sendable {
+    public final class Runtime: Sendable {
         // MARK: Immutable state
 
         /// The immutable boot configuration. Retained for merge precedence
@@ -86,10 +75,10 @@ extension OPA {
 
         public let logger: Logger
 
-        // MARK: Mutable state (each group guarded by its own Mutex)
+        // MARK: Mutable state (guarded by `state`)
 
-        /// Group: Configuration state.
-        private struct ConfigState {
+        private struct State {
+            // --- Configuration ---
             var activeConfig: OPA.Config
             var latestConfig: Result<OPA.Config, any Swift.Error>?
             /// Monotonic counter incremented on every config change.
@@ -98,11 +87,8 @@ extension OPA {
             /// configuration updates over time. Built at init from the boot
             /// config or injected directly as an init parameter.
             var configProvider: (any OPA.ConfigProvider)?
-        }
-        private let configState: Mutex<ConfigState>
 
-        /// Group: Bundle state.
-        private struct BundleState {
+            // --- Bundles ---
             /// Storage for loaded bundles (both successful and failed).
             var bundleStorage: [String: Result<OPA.Bundle, any Swift.Error>] = [:]
             /// Monotonic counter incremented on every bundle change.
@@ -114,11 +100,8 @@ extension OPA {
             var cachedBundles: [String: OPA.Bundle] = [:]
             /// Sentinel `.max` forces the first read to populate the cache.
             var cachedBundlesGeneration: UInt64 = .max
-        }
-        private let bundleState: Mutex<BundleState>
 
-        /// Group: Query and prepared-query state.
-        private struct QueryState {
+            // --- Queries / Prepared queries ---
             /// Set of "always on" queries that will be automatically prepared
             /// on bundle changes.
             var queries: Set<String>
@@ -133,31 +116,31 @@ extension OPA {
             /// Query generation observed at the last successful prepare.
             var preparedQueryGeneration: UInt64 = 0
         }
-        private let queryState: Mutex<QueryState>
+        private let state: Mutex<State>
 
         // MARK: Public synchronous accessors
         //
-        // Each accessor below briefly takes its group's lock and returns
-        // a by-value snapshot.
+        // Each accessor below briefly takes the lock and returns a
+        // by-value snapshot.
 
         /// The active configuration this Runtime is using.
         public var activeConfig: OPA.Config {
-            configState.withLock { $0.activeConfig }
+            state.withLock { $0.activeConfig }
         }
 
         /// Result of the last config load attempt.
         public var latestConfig: Result<OPA.Config, any Swift.Error>? {
-            configState.withLock { $0.latestConfig }
+            state.withLock { $0.latestConfig }
         }
 
         /// Snapshot of the bundle storage, including failed loads.
         public var bundleStorage: [String: Result<OPA.Bundle, any Swift.Error>] {
-            bundleState.withLock { $0.bundleStorage }
+            state.withLock { $0.bundleStorage }
         }
 
         /// Snapshot of successfully-loaded bundles.
         public var bundles: [String: OPA.Bundle] {
-            bundleState.withLock { state in
+            state.withLock { state in
                 if state.cachedBundlesGeneration != state.bundleGeneration {
                     var result: [String: OPA.Bundle] = [:]
                     result.reserveCapacity(state.bundleStorage.count)
@@ -175,7 +158,7 @@ extension OPA {
 
         /// Snapshot of the registered query set.
         public var queries: Set<String> {
-            queryState.withLock { $0.queries }
+            state.withLock { $0.queries }
         }
 
         // MARK: Init
@@ -229,16 +212,13 @@ extension OPA {
                 resolvedProvider = nil
             }
 
-            self.configState = Mutex(
-                ConfigState(
+            let initialQueries = Set(queries ?? [])
+            self.state = Mutex(
+                State(
                     activeConfig: config,
                     latestConfig: nil,
                     configGeneration: 0,
-                    configProvider: resolvedProvider))
-            self.bundleState = Mutex(BundleState())
-            let initialQueries = Set(queries ?? [])
-            self.queryState = Mutex(
-                QueryState(
+                    configProvider: resolvedProvider,
                     queries: initialQueries,
                     queryGeneration: initialQueries.isEmpty ? 0 : 1))
         }
@@ -250,7 +230,7 @@ extension OPA {
 extension OPA.Runtime {
     /// Adds a query that will automatically be prepared for later evaluation.
     public func addQuery(_ query: String) {
-        queryState.withLock { state in
+        state.withLock { state in
             if state.queries.insert(query).inserted {
                 state.queryGeneration &+= 1
             }
@@ -259,7 +239,7 @@ extension OPA.Runtime {
 
     /// Adds a list of queries from a sequence that will automatically be prepared for later evaluation.
     public func addQueries<S>(_ queries: S) where String == S.Element, S: Sequence {
-        queryState.withLock { state in
+        state.withLock { state in
             if !state.queries.isSuperset(of: queries) {
                 state.queries.formUnion(queries)
                 state.queryGeneration &+= 1
@@ -269,7 +249,7 @@ extension OPA.Runtime {
 
     /// Removes a query that will automatically be prepared for later evaluation.
     public func removeQuery(_ query: String) {
-        queryState.withLock { state in
+        state.withLock { state in
             if state.queries.remove(query) != nil {
                 state.preparedQueries.removeValue(forKey: query)
                 state.queryGeneration &+= 1
@@ -279,7 +259,7 @@ extension OPA.Runtime {
 
     /// Removes a list of queries from the set the Runtime maintains.
     public func removeQueries<S>(_ queries: S) where String == S.Element, S: Sequence {
-        queryState.withLock { state in
+        state.withLock { state in
             let queryCount = state.queries.count
             state.queries.subtract(queries)
             for query in queries {
@@ -291,7 +271,7 @@ extension OPA.Runtime {
         }
     }
 
-    /// Action computed under the query lock describing what `prepare()`
+    /// Action computed under the lock describing what `prepare()`
     /// should do off-lock.
     private enum PrepareAction {
         case upToDate
@@ -306,26 +286,26 @@ extension OPA.Runtime {
     ///
     /// Concurrency notes:
     ///  - All long-running work (engine setup, query preparation) runs
-    ///    *without* any lock held.
+    ///    *without* the lock held.
     ///  - Generations are snapshotted before going off-lock so that on
     ///    commit we can detect that newer writes have invalidated our
     ///    work; in that case we still publish prepared queries (they are
     ///    not wrong, just possibly stale) but record the snapshot
     ///    generations so subsequent callers re-prepare.
     private func prepare(adhocQueries: [String]) async throws -> [String: OPA.Engine.PreparedQuery] {
-        // Ensure any new ad-hoc queries are tracked.
-        queryState.withLock { state in
+        // Decide what work to do under the lock, and snapshot the bundle
+        // set + generations consistently with that decision.
+        let bundleSnapshot: [String: OPA.Bundle]
+        let action: PrepareAction
+        (bundleSnapshot, action) = state.withLock { state -> ([String: OPA.Bundle], PrepareAction) in
+            // Ensure any new ad-hoc queries are tracked.
             let adhocSet = Set(adhocQueries)
             if !adhocSet.isSubset(of: state.queries) {
                 state.queries.formUnion(adhocSet)
                 state.queryGeneration &+= 1
             }
-        }
 
-        // Snapshot bundles + bundle generation atomically so the snapshot
-        // we use for preparation is consistent with the generation we
-        // record on commit.
-        let (bundleSnapshot, bundleGen) = bundleState.withLock { state -> ([String: OPA.Bundle], UInt64) in
+            // Refresh the cached bundle map if it's behind.
             if state.cachedBundlesGeneration != state.bundleGeneration {
                 var result: [String: OPA.Bundle] = [:]
                 result.reserveCapacity(state.bundleStorage.count)
@@ -337,47 +317,42 @@ extension OPA.Runtime {
                 state.cachedBundles = result
                 state.cachedBundlesGeneration = state.bundleGeneration
             }
-            return (state.cachedBundles, state.bundleGeneration)
-        }
+            let bundles = state.cachedBundles
+            let bundleGen = state.bundleGeneration
 
-        // Decide what work to do under the query lock.
-        let action: PrepareAction = queryState.withLock { state in
             let sameBundleGen = bundleGen == state.preparedBundleGeneration
             let sameQueryGen = state.queryGeneration == state.preparedQueryGeneration
+            let action: PrepareAction
             switch (sameBundleGen, sameQueryGen) {
             case (true, true):
-                return .upToDate
+                action = .upToDate
             case (true, false):
                 let unprepared = state.queries.subtracting(state.preparedQueries.keys)
                 if unprepared.isEmpty {
-                    return .upToDate
+                    action = .upToDate
+                } else {
+                    action = .partial(queriesToPrepare: unprepared, queryGen: state.queryGeneration)
                 }
-                return .partial(queriesToPrepare: unprepared, queryGen: state.queryGeneration)
             default:
-                return .full(
+                action = .full(
                     queriesToPrepare: state.queries,
                     bundleGen: bundleGen,
                     queryGen: state.queryGeneration)
             }
+            return (bundles, action)
         }
 
         switch action {
         case .upToDate:
-            // Nothing to do; mark "caught up" against the snapshot we just
-            // observed so subsequent fast-paths can hit the cache.
-            return queryState.withLock { state in
-                if bundleGen > state.preparedBundleGeneration {
-                    state.preparedBundleGeneration = bundleGen
-                }
-                return state.preparedQueries
-            }
+            // Nothing to do; return whatever's currently published.
+            return state.withLock { $0.preparedQueries }
 
         case .partial(let queriesToPrepare, let queryGen):
             let pq = try await Self.prepareQueries(
                 bundles: bundleSnapshot,
                 queries: queriesToPrepare,
                 customBuiltins: customBuiltins)
-            return queryState.withLock { state in
+            return state.withLock { state in
                 state.preparedQueries.merge(pq, uniquingKeysWith: { (_, new) in new })
                 // Only mark "caught up" to the generation we snapshotted.
                 if state.preparedQueryGeneration < queryGen {
@@ -391,7 +366,7 @@ extension OPA.Runtime {
                 bundles: bundleSnapshot,
                 queries: queriesToPrepare,
                 customBuiltins: customBuiltins)
-            return queryState.withLock { state in
+            return state.withLock { state in
                 state.preparedQueries = pq
                 // Only mark "caught up" to the generations we snapshotted.
                 // If a newer generation arrived mid-prepare, the next
@@ -425,9 +400,8 @@ extension OPA.Runtime {
     /// Synchronous fast-path read. Returns nil if the prepared-query
     /// cache is stale relative to the current bundle/query generations.
     private func cachedPreparedQuery(for query: String) -> OPA.Engine.PreparedQuery? {
-        let bundleGen = bundleState.withLock { $0.bundleGeneration }
-        return queryState.withLock { state in
-            guard bundleGen == state.preparedBundleGeneration,
+        return state.withLock { state in
+            guard state.bundleGeneration == state.preparedBundleGeneration,
                 state.queryGeneration == state.preparedQueryGeneration
             else { return nil }
             return state.preparedQueries[query]
@@ -483,7 +457,7 @@ extension OPA.Runtime {
     /// The initial active config is always emitted to bootstrap bundle
     /// workers, even if no config provider is present.
     public func run() async throws {
-        let provider = configState.withLock { $0.configProvider }
+        let provider = state.withLock { $0.configProvider }
         let initialConfig = self.bootConfig
 
         try await withThrowingTaskGroup(of: Void.self) { group in
@@ -496,13 +470,13 @@ extension OPA.Runtime {
                 group.addTask {
                     defer { configContinuation.finish() }
 
-                    var currentConfigGeneration = self.configState.withLock { $0.configGeneration }
+                    var currentConfigGeneration = self.state.withLock { $0.configGeneration }
                     while !Task.isCancelled {
                         let result = await provider.load()
 
                         // Attempt to update the active config. Only publish on change.
                         self.updateConfig(result: result)
-                        let newConfigGeneration = self.configState.withLock { $0.configGeneration }
+                        let newConfigGeneration = self.state.withLock { $0.configGeneration }
                         if currentConfigGeneration != newConfigGeneration {
                             configContinuation.yield(result)
                         }
@@ -653,7 +627,7 @@ extension OPA.Runtime {
     private func updateConfig(
         result: Result<OPA.Config, any Swift.Error>
     ) {
-        configState.withLock { state in
+        state.withLock { state in
             // Deduplicate — skip if the result hasn't meaningfully changed.
             switch (state.latestConfig, result) {
             case (.success(let old), .success(let new))
@@ -715,7 +689,7 @@ extension OPA.Runtime {
         name: String,
         result: Result<OPA.Bundle, any Swift.Error>
     ) {
-        bundleState.withLock { state in
+        state.withLock { state in
             // Deduplicate — skip if the result hasn't meaningfully changed.
             switch (state.bundleStorage[name], result) {
             case (.success(let old), .success(let new))

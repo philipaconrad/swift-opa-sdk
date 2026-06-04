@@ -250,7 +250,7 @@ struct RuntimeHTTPBundleClientTLSAuthTests {
         defer { backgroundFetchTask.cancel() }
 
         let _ = await waitForBundleLoad(rt: rt, name: "test", timeout: .seconds(2))
-        let bundleStorage = await rt.bundleStorage
+        let bundleStorage = rt.bundleStorage
         let bundleResult = try #require(
             bundleStorage["test"], "Expected bundle storage entry for 'test'")
         let _ = try requireBundleLoadFailure(bundleResult, context: "cert file missing")
@@ -296,7 +296,7 @@ struct RuntimeHTTPBundleClientTLSAuthTests {
         defer { backgroundFetchTask.cancel() }
 
         let _ = await waitForBundleLoad(rt: rt, name: "test", timeout: .seconds(2))
-        let bundleStorage = await rt.bundleStorage
+        let bundleStorage = rt.bundleStorage
         let bundleResult = try #require(bundleStorage["test"])
         let _ = try requireBundleLoadFailure(bundleResult, context: "key file missing")
     }
@@ -479,7 +479,7 @@ struct RuntimeHTTPBundleClientTLSAuthTests {
 
         // Wait for first successful load.
         let _ = await waitForBundleLoad(rt: rt, name: "test", timeout: .seconds(5))
-        let firstStorage = await rt.bundleStorage
+        let firstStorage = rt.bundleStorage
         guard case .success = firstStorage["test"] else {
             Issue.record(
                 "Expected initial load to succeed, got \(String(describing: firstStorage["test"]))")
@@ -574,7 +574,7 @@ struct RuntimeHTTPBundleClientTLSAuthTests {
         defer { backgroundFetchTask.cancel() }
 
         let _ = await waitForBundleLoad(rt: rt, name: "test", timeout: .seconds(5))
-        let bundleStorage = await rt.bundleStorage
+        let bundleStorage = rt.bundleStorage
         let bundleResult = try #require(bundleStorage["test"], "Expected bundle storage entry for 'test'")
         guard case .success = bundleResult else {
             Issue.record("Expected bundle 'test' to be .success, got \(bundleResult)")
