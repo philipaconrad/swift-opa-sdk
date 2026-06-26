@@ -62,6 +62,78 @@ runtimeTask.cancel()
 
 Its APIs are inspired by OPA's [`sdk.OPA` type](https://pkg.go.dev/github.com/open-policy-agent/opa/v1/sdk#OPA) in the Go [`sdk` library](https://pkg.go.dev/github.com/open-policy-agent/opa/v1/sdk).
 
+## RegoExtensions
+
+The `RegoExtensions` target provides built-in Rego functions not included in [swift-opa](https://github.com/open-policy-agent/swift-opa) itself.
+When using `OPA.Runtime` from the `SwiftOPASDK` product, these are registered automatically.
+If you use `OPA.Engine` directly, you can register them explicitly via the `customBuiltins` parameter.
+
+Currently provided builtins:
+
+| Rego name | Description |
+|:---|:---|
+| `yaml.is_valid` | Returns `true` if the input string is valid YAML |
+| `yaml.marshal` | Serializes a Rego value to a YAML string |
+| `yaml.unmarshal` | Deserializes a YAML string to a Rego value |
+
+### Adding RegoExtensions as a dependency
+
+**Package.swift**
+```swift
+let package = Package(
+    platforms: [
+        .macOS(.v13),
+        .iOS(.v16),
+    ],
+    dependencies: [
+        .package(url: "https://github.com/open-policy-agent/swift-opa", branch: "main"),
+        .package(url: "https://github.com/open-policy-agent/swift-opa-sdk", branch: "main"),
+    ],
+    targets: [
+        .executableTarget(name: "<target-name>", dependencies: [
+            .product(name: "SwiftOPA", package: "swift-opa"),
+            .product(name: "RegoExtensions", package: "swift-opa-sdk"),
+        ]),
+    ]
+)
+```
+
+### Example: customizing an Engine with YAML builtins
+
+```swift
+import Rego
+import RegoExtensions
+
+let engine = OPA.Engine(
+    bundlePaths: [.init(path: "./bundles/authz.tar.gz", isDir: false)],
+    customBuiltins: SDKBuiltinFuncs.sdkDefaultBuiltins
+)
+
+let prepared = try await engine.prepareForEval(query: "data.authz.allow")
+let result = try await prepared.eval(input: .object(["user": .string("alice")]))
+```
+
+You can also merge the YAML builtins with your own custom builtins:
+
+```swift
+import Rego
+import RegoExtensions
+
+let myBuiltins: [String: AsyncBuiltin] = [
+    "custom.greet": { _, args in
+        guard case .string(let name) = args.first else {
+            throw BuiltinError.argumentTypeMismatch(arg: "name", got: args.first?.typeName ?? "none", want: "string")
+        }
+        return .string("Hello, \(name)!")
+    }
+]
+
+let engine = OPA.Engine(
+    bundlePaths: [.init(path: "./bundles/authz.tar.gz", isDir: false)],
+    customBuiltins: SDKBuiltinFuncs.sdkDefaultBuiltins.merging(myBuiltins, uniquingKeysWith: { _, new in new })
+)
+```
+
 ## Bundle Service Support
 
 Currently, the `OPA.Runtime` only implements loading bundles from a subset of the control plane [`service` credential types](https://www.openpolicyagent.org/docs/configuration#services) that OPA supports.

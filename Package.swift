@@ -12,7 +12,11 @@ let package = Package(
         .library(
             name: "SwiftOPASDK",
             targets: ["SwiftOPASDK"]
-        )
+        ),
+        .library(
+            name: "RegoExtensions",
+            targets: ["RegoExtensions"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/open-policy-agent/swift-opa", branch: "main"),
