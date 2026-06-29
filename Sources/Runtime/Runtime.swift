@@ -65,7 +65,7 @@ extension OPA {
 
         /// A set of additional builtins that will be provided to the Engine
         /// during query preparation.
-        public let customBuiltins: [String: Rego.Builtin]
+        public let customBuiltins: [String: Rego.BuiltinImpl]
 
         /// HTTP client configuration to use in bundle loaders.
         public let httpClientConfig: HTTPClient.Configuration?
@@ -161,6 +161,22 @@ extension OPA {
             state.withLock { $0.queries }
         }
 
+        /// The async-only builtins registered with this Runtime, derived from ``customBuiltins``.
+        public var customAsyncBuiltins: [String: Rego.AsyncBuiltin] {
+            customBuiltins.compactMapValues {
+                guard case .asyncOnly(let f) = $0 else { return nil }
+                return f
+            }
+        }
+
+        /// The synchronous builtins registered with this Runtime, derived from ``customBuiltins``.
+        public var customSyncBuiltins: [String: Rego.SyncBuiltin] {
+            customBuiltins.compactMapValues {
+                guard case .sync(let f) = $0 else { return nil }
+                return f
+            }
+        }
+
         // MARK: Init
 
         /// Initialize a Runtime with the given boot configuration.
@@ -179,7 +195,7 @@ extension OPA {
         ///   - bundleLoaders: BundleLoader types to use, in priority order.
         ///   - configProvider: An optional config provider. If nil and `config.discovery`
         ///     is set, a ``DiscoveryConfigProvider`` is created automatically.
-        ///   - customBuiltins: A dictionary of custom `Rego.Builtin` implementations
+        ///   - customBuiltins: A dictionary of custom `Rego.BuiltinImpl` implementations
         ///     to use with the `OPA.Engine` at query preparation time.
         public init(
             config: OPA.Config,
@@ -191,7 +207,7 @@ extension OPA {
                 OPA.RESTClientBundleLoader.self,
             ],
             configProvider: (any OPA.ConfigProvider)? = nil,
-            customBuiltins: [String: Rego.Builtin] = [:],
+            customBuiltins: [String: Rego.BuiltinImpl] = [:],
             logger: Logger? = nil
         ) throws {
             self.bootConfig = config
@@ -387,7 +403,7 @@ extension OPA.Runtime {
     private static func prepareQueries(
         bundles: [String: OPA.Bundle],
         queries: Set<String>,
-        customBuiltins: [String: Rego.Builtin] = [:]
+        customBuiltins: [String: Rego.BuiltinImpl] = [:]
     ) async throws -> [String: OPA.Engine.PreparedQuery] {
         var engine = OPA.Engine(bundles: bundles, capabilities: nil, customBuiltins: customBuiltins)
         var pq: [String: OPA.Engine.PreparedQuery] = Dictionary(minimumCapacity: queries.count)
@@ -711,3 +727,47 @@ extension OPA.Runtime {
 }
 
 public typealias DecisionIDGenerator = @Sendable () async throws -> String
+
+// MARK: - OPA.Runtime convenience initializers
+
+extension OPA.Runtime {
+    /// Initializes a Runtime with separate async-only and synchronous builtin dictionaries,
+    /// mirroring the typed parameter style used by ``OPA/Engine``.
+    ///
+    /// Prefer the ``init(config:queries:instanceID:httpClientConfig:bundleLoaders:configProvider:customBuiltins:logger:)``
+    /// overload that accepts ``Rego/BuiltinImpl`` values when possible — it carries sync/async
+    /// intent in the type and avoids an extra merge step. Use this overload when you already hold
+    /// typed dictionaries and don't want to convert them manually.
+    ///
+    /// - Parameters:
+    ///   - customAsyncBuiltins: Async-only builtins. Available on the async VM path only.
+    ///   - customSyncBuiltins: Synchronous builtins. Available on both the async and sync VM paths.
+    public convenience init(
+        config: OPA.Config,
+        queries: [String]? = nil,
+        instanceID: String = UUID().uuidString,
+        httpClientConfig: HTTPClient.Configuration? = nil,
+        bundleLoaders: [OPA.BundleLoader.Type] = [
+            OPA.DiskBasedBundleLoader.self,
+            OPA.RESTClientBundleLoader.self,
+        ],
+        configProvider: (any OPA.ConfigProvider)? = nil,
+        customAsyncBuiltins: [String: Rego.AsyncBuiltin] = [:],
+        customSyncBuiltins: [String: Rego.SyncBuiltin] = [:],
+        logger: Logger? = nil
+    ) throws {
+        var combined: [String: Rego.BuiltinImpl] = Dictionary(
+            minimumCapacity: customAsyncBuiltins.count + customSyncBuiltins.count)
+        for (name, f) in customAsyncBuiltins { combined[name] = .asyncOnly(f) }
+        for (name, f) in customSyncBuiltins { combined[name] = .sync(f) }
+        try self.init(
+            config: config,
+            queries: queries,
+            instanceID: instanceID,
+            httpClientConfig: httpClientConfig,
+            bundleLoaders: bundleLoaders,
+            configProvider: configProvider,
+            customBuiltins: combined,
+            logger: logger)
+    }
+}

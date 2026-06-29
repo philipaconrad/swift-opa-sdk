@@ -5,7 +5,7 @@ import Yams
 
 extension SDKBuiltinFuncs {
     /// Verifies the input string is a valid YAML document.
-    public static func yamlIsValid(ctx: BuiltinContext, args: [AST.RegoValue]) async throws -> AST.RegoValue {
+    public static func yamlIsValid(ctx: BuiltinContext, args: [AST.RegoValue]) throws -> AST.RegoValue {
         guard args.count == 1 else {
             throw Rego.BuiltinError.argumentCountMismatch(got: args.count, want: 1)
         }
@@ -19,7 +19,7 @@ extension SDKBuiltinFuncs {
     }
 
     /// Serializes the input term to YAML.
-    public static func yamlMarshal(ctx: BuiltinContext, args: [AST.RegoValue]) async throws -> AST.RegoValue {
+    public static func yamlMarshal(ctx: BuiltinContext, args: [AST.RegoValue]) throws -> AST.RegoValue {
         guard args.count == 1 else {
             throw Rego.BuiltinError.argumentCountMismatch(got: args.count, want: 1)
         }
@@ -31,7 +31,7 @@ extension SDKBuiltinFuncs {
     }
 
     /// Deserializes the input YAML string to a term.
-    public static func yamlUnmarshal(ctx: BuiltinContext, args: [AST.RegoValue]) async throws -> AST.RegoValue {
+    public static func yamlUnmarshal(ctx: BuiltinContext, args: [AST.RegoValue]) throws -> AST.RegoValue {
         guard args.count == 1 else {
             throw Rego.BuiltinError.argumentCountMismatch(got: args.count, want: 1)
         }

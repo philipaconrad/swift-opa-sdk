@@ -9,10 +9,10 @@ import Testing
 
 @Suite("RuntimeCustomBuiltinsTests")
 struct RuntimeCustomBuiltinsTests {
-    let customBuiltinRegistry: [String: Rego.Builtin] =
+    let customBuiltinRegistry: [String: Rego.BuiltinImpl] =
         [
             // a + (b * c) = output
-            "custom_fma": { ctx, args in
+            "custom_fma": .sync({ ctx, args in
                 guard args.count == 3 else {
                     throw BuiltinError.argumentCountMismatch(got: args.count, want: 2)
                 }
@@ -30,7 +30,7 @@ struct RuntimeCustomBuiltinsTests {
                 }
 
                 return .number(RegoNumber(a.decimalValue + (b.decimalValue * c.decimalValue)))
-            }
+            })
         ]
 
     @Test func customBuiltinWorksInRuntime() async throws {
