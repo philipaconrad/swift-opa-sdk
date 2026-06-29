@@ -243,8 +243,7 @@ extension OPA {
         ) async throws -> OPA.Config {
             var engine = OPA.Engine(
                 bundles: ["discovery": bundle],
-                capabilities: nil,
-                customBuiltins: [:]
+                capabilities: nil
             )
             let preparedQuery = try await engine.prepareForEvaluation(query: query)
             let resultValue = try await preparedQuery.evaluate(input: .object([:]))

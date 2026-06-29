@@ -230,13 +230,7 @@ private func requireThrows<E: Error & Sendable, R>(
 }
 
 /// Returns the merged set of builtins for this library and Swift OPA.
-private func getSDKDefaultBuiltins() -> [String: Rego.Builtin] {
-    let opaDefaultRegistry = BuiltinRegistry.defaultRegistry
-    let opaDefaultBuiltins = BuiltinRegistry.getSupportedBuiltinNames().reduce(into: [String: Builtin]()) {
-        dict, key in
-        dict[key] = opaDefaultRegistry[key]
-    }
-
-    // Merge with upstream Swift OPA's builtins, keeping ours on conflicts.
+private func getSDKDefaultBuiltins() -> [String: Rego.BuiltinImpl] {
+    let opaDefaultBuiltins = BuiltinRegistry.defaultBuiltins.mapValues { Rego.BuiltinImpl.sync($0) }
     return SDKBuiltinFuncs.sdkDefaultBuiltins.merging(opaDefaultBuiltins, uniquingKeysWith: { sdk, _ in sdk })
 }
