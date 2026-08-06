@@ -42,6 +42,13 @@ extension OPA {
         private let httpClientCache: OPA.HTTPClientCache?
         private let sink: OPA.BundleUpdateSink
         private let onRemoved: (@Sendable (Set<String>) -> Void)?
+        /// Extra service names whose cached HTTP clients should be retained on
+        /// each config, beyond the bundle/discovery services this manager
+        /// derives itself. Computed per config so a caller can pin clients for
+        /// services it owns out-of-band (e.g. a decision-log upload service)
+        /// and keep them warm across `retainOnly`. Returns an empty set to add
+        /// nothing.
+        private let additionalRetainedServices: (@Sendable (OPA.Config) -> Set<String>)?
         private let logger: Logger
         private let running = Mutex<[String: Running]>([:])
         /// Bundle names present in the last applied config. Tracked so a name
@@ -54,12 +61,14 @@ extension OPA {
             httpClientCache: OPA.HTTPClientCache?,
             sink: @escaping OPA.BundleUpdateSink,
             onRemoved: (@Sendable (Set<String>) -> Void)? = nil,
+            additionalRetainedServices: (@Sendable (OPA.Config) -> Set<String>)? = nil,
             logger: Logger? = nil
         ) {
             self.factory = factory
             self.httpClientCache = httpClientCache
             self.sink = sink
             self.onRemoved = onRemoved
+            self.additionalRetainedServices = additionalRetainedServices
             self.logger = logger ?? Logger(label: "swift-opa.bundle-manager")
         }
 
@@ -132,6 +141,9 @@ extension OPA {
             var referencedServices = Set(config.bundles.values.map(\.service))
             if let discoveryService = config.discovery?.service {
                 referencedServices.insert(discoveryService)
+            }
+            if let additionalRetainedServices {
+                referencedServices.formUnion(additionalRetainedServices(config))
             }
             httpClientCache?.retainOnly(services: referencedServices)
 

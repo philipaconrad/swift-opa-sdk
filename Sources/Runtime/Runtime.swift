@@ -91,6 +91,14 @@ extension OPA {
         /// Bundle loader type list to use for loading bundles. Ordered by priority.
         private let bundleLoaders: [BundleLoader.Type]
 
+        /// Decision logger type list, ordered by priority. The first type whose
+        /// ``OPA/DecisionLogger/compatibleWithConfig(_:)`` matches the resolved
+        /// `decision_logs` config is selected. Mirrors ``bundleLoaders``.
+        /// Console logging is handled inline in ``decision(_:input:decisionID:)``
+        /// (gated by `decision_logs.console`), so ``ConsoleDecisionLogger`` is
+        /// deliberately *not* in the default list.
+        private let decisionLoggers: [DecisionLogger.Type]
+
         /// Factory that selects and constructs bundle loaders from the configured
         /// loader-type list and the injected HTTP inputs.
         private let loaderFactory: OPA.BundleLoaderFactory
@@ -128,6 +136,18 @@ extension OPA {
             var preparedBundleGeneration: UInt64 = 0
             /// Query generation observed at the last successful prepare.
             var preparedQueryGeneration: UInt64 = 0
+
+            // --- Decision logging ---
+            /// The active service-backed decision logger instance, if any. Nil
+            /// for the console-only case (no upload service). Rebuilt on config
+            /// change with events drained from its predecessor.
+            var decisionLogger: (any OPA.DecisionLogger)? = nil
+            /// Drop/mask policy entrypoints found undefined (evaluate threw
+            /// `.unknownQuery`), keyed to the `bundleStore.generation` at which that
+            /// was observed. Lets `decision()` skip the per-decision evaluation
+            /// of a mask/drop policy that simply isn't in the bundle, until the
+            /// bundles change. Common case: no mask/drop policy configured.
+            var undefinedPolicyQueries: [String: UInt64] = [:]
         }
         private let state: Mutex<State>
 
@@ -202,6 +222,10 @@ extension OPA {
         ///     HTTP-based bundle loaders, including the discovery bundle loader.
         ///   - httpClientConfig: Where bundle loaders get their HTTP client configuration.
         ///   - bundleLoaders: BundleLoader types to use, in priority order.
+        ///   - decisionLoggers: DecisionLogger types to use, in priority order.
+        ///     The first whose `compatibleWithConfig` matches the resolved
+        ///     `decision_logs` config is selected. Console logging is handled
+        ///     inline in `decision()`, independent of this list.
         ///   - configProvider: An optional config provider. If nil and `config.discovery`
         ///     is set, a ``DiscoveryConfigProvider`` is created automatically.
         ///   - customBuiltins: A dictionary of custom `Rego.BuiltinImpl` implementations
@@ -216,6 +240,7 @@ extension OPA {
                 OPA.DiskBasedBundleLoader.self,
                 OPA.RESTClientBundleLoader.self,
             ],
+            decisionLoggers: [DecisionLogger.Type] = [OPA.BufferedDecisionLogger.self],
             configProvider: (any OPA.ConfigProvider)? = nil,
             customBuiltins: [String: Rego.BuiltinImpl] = [:],
             logger: Logger? = nil
@@ -227,6 +252,7 @@ extension OPA {
             self.headers = headers
             self.httpClientConfig = httpClientConfig
             self.bundleLoaders = bundleLoaders
+            self.decisionLoggers = decisionLoggers
             self.logger = logger ?? Logger(label: "swift-opa.runtime:\(instanceID)")
             self.httpClientCache = OPA.HTTPClientCache(
                 logger: self.logger)
@@ -261,6 +287,11 @@ extension OPA {
             }
 
             let initialQueries = Set(queries ?? [])
+            // Validate the boot config's `decision_logs` eagerly so a bad
+            // section fails init. The resolved value isn't stored: it's
+            // recomputed per config generation in the worker loop, and
+            // `logDecision` reads the raw (unresolved) fields it needs.
+            _ = try Self.resolveDecisionLogsConfig(config)
             self.state = Mutex(
                 State(
                     activeConfig: config,
@@ -461,6 +492,7 @@ extension OPA.Runtime {
         if let pq = self.cachedPreparedQuery(for: query) {
             let result = try await pq.evaluate(input: input)
             self.logger.info("decision: \(decisionID), result: \(result)")
+            await self.logDecision(query: query, input: input, result: result, decisionID: decisionID)
             return OPA.DecisionResult(id: decisionID, result: result)
         }
 
@@ -475,7 +507,314 @@ extension OPA.Runtime {
         }
         let result = try await pq.evaluate(input: input)
         self.logger.debug("decision: \(decisionID), result: \(result)")
+        await self.logDecision(query: query, input: input, result: result, decisionID: decisionID)
         return OPA.DecisionResult(id: decisionID, result: result)
+    }
+}
+
+// MARK: - Decision Logging
+
+extension OPA.Runtime {
+    /// SDK version emitted as the `version` decision-log label, mirroring OPA's
+    /// EventV1 `labels.version`. Bump this on each release.
+    static let sdkVersion = "0.0.4"
+
+    /// Resolves the top-level config's `decision_logs` section (injecting
+    /// defaults: service defaulting, delay/upload/buffer defaults, resource
+    /// path). Returns nil when decision logging isn't configured.
+    static func resolveDecisionLogsConfig(_ config: OPA.Config) throws -> OPA.DecisionLogsConfig? {
+        try config.decisionLogs?.resolved(
+            services: Array(config.services.keys),
+            plugins: Array((config.plugins ?? [:]).keys),
+            trigger: nil)
+    }
+
+    /// Builds the decision logger for `resolved` by selecting the first
+    /// compatible type from ``decisionLoggers``, seeding it with `startingEvents`.
+    /// Returns nil when no type matches (e.g. the console-only case, where
+    /// `service` is empty). Analogous to ``getBundleLoader(name:config:logger:)``.
+    func getDecisionLogger(
+        resolved: OPA.DecisionLogsConfig,
+        config: OPA.Config,
+        startingEvents: [OPA.DecisionLogEvent]
+    ) throws -> (any OPA.DecisionLogger)? {
+        let service = config.services[resolved.service]
+        // Resolve the config source down to a concrete configuration the same
+        // way the REST loader's baseline does: a fixed config is honored,
+        // closure-based sources fall back to the client default. The logger
+        // draws its client from the shared cache (keyed by service), so uploads
+        // reuse a warm, connection-pooling client rather than a one-off.
+        let concreteHTTPConfig: HTTPClient.Configuration?
+        if case .fixed(let injected) = self.httpClientConfig {
+            concreteHTTPConfig = injected
+        } else {
+            concreteHTTPConfig = nil
+        }
+
+        for loggerType in self.decisionLoggers {
+            guard loggerType.compatibleWithConfig(resolved) else { continue }
+            return try loggerType.init(
+                config: resolved,
+                service: service,
+                httpClientConfig: concreteHTTPConfig,
+                httpClientCache: self.httpClientCache,
+                logger: self.logger,
+                startingEvents: startingEvents)
+        }
+        return nil
+    }
+
+    /// Builds an ``OPA/DecisionLogEvent`` for a decision result, runs the
+    /// drop and mask policies on the decision, emits it to the console (when
+    /// configured), and hands it to the active logger. A no-op when decision
+    /// logging isn't configured.
+    ///
+    /// Called off-lock from ``decision(_:input:decisionID:)`` after evaluation.
+    func logDecision(
+        query: String,
+        input: AST.RegoValue,
+        result: Rego.ResultSet,
+        decisionID: String
+    ) async {
+        let (activeLogger, activeCfg) = state.withLock {
+            ($0.decisionLogger, $0.activeConfig)
+        }
+        // `dropDecision`, `maskDecision`, and `consoleLogs` are verbatim
+        // pass-throughs of resolution, so the raw config is sufficient here.
+        // The resolved config (service defaulting, etc.) is only needed where
+        // the upload service is consumed, in the worker loop.
+        guard let dlConfig = activeCfg.decisionLogs else { return }  // decision logging not configured
+
+        // Build the base event.
+        var labels = activeCfg.labels
+        labels["id"] = self.instanceID
+        labels["version"] = OPA.Runtime.sdkVersion
+        let eventPath = OPA.DecisionLogMaskDropPolicy.queryToEventPath(query)
+        var event = OPA.DecisionLogEvent(
+            labels: labels,
+            decisionID: decisionID,
+            path: eventPath,
+            query: eventPath == nil ? query : nil,
+            input: input,
+            result: OPA.DecisionLogMaskDropPolicy.decisionValue(from: result),
+            timestamp: Date(),
+            bundles: bundleRevisions())
+
+        // Drop / mask policies. Both receive the same (pre-mask) event as their
+        // `input`, so the encoded policy input is built at most once and shared.
+        // Entrypoints already known-undefined for the current bundle generation
+        // are skipped entirely, so the common "no mask/drop policy" case costs
+        // nothing beyond a lock read after the first decision.
+        //
+        // Masking is a data-protection control, so it fails closed: if a
+        // configured mask/drop policy can't be applied (the event won't encode,
+        // the policy errors, or it emits a malformed rule), the event is dropped
+        // entirely.
+        let dropQuery = OPA.DecisionLogMaskDropPolicy.configPathToQuery(dlConfig.dropDecision)
+        let maskQuery = OPA.DecisionLogMaskDropPolicy.configPathToQuery(dlConfig.maskDecision)
+        let bundleGen = state.withLock { $0.bundleStore.generation }
+        let needDrop = dropQuery.map { !isPolicyKnownUndefined($0, bundleGen: bundleGen) } ?? false
+        let needMask = maskQuery.map { !isPolicyKnownUndefined($0, bundleGen: bundleGen) } ?? false
+
+        if needDrop || needMask {
+            guard let policyInput = try? Self.policyInput(from: event) else {
+                self.logger.error(
+                    "decision log \(decisionID) dropped: failed to encode event for drop/mask policy")
+                return  // fail closed
+            }
+
+            // Drop policy: Drop the event entirely, log only that we dropped it.
+            if needDrop, let dropQuery {
+                switch await evaluatePolicy(query: dropQuery, input: policyInput, bundleGen: bundleGen) {
+                case .absent:
+                    break
+                case .defined(let dropResult):
+                    if OPA.DecisionLogMaskDropPolicy.shouldDrop(dropResult) { return }
+                case .failed:
+                    self.logger.error("decision log \(decisionID) dropped: drop policy failed")
+                    return  // fail closed
+                }
+            }
+
+            // Mask policy: parse and apply, populating `erased`/`masked`. A
+            // policy failure or a malformed rule drops the event.
+            if needMask, let maskQuery {
+                switch await evaluatePolicy(query: maskQuery, input: policyInput, bundleGen: bundleGen) {
+                case .absent:
+                    break
+                case .defined(let maskResult):
+                    let parsed = OPA.DecisionLogMaskDropPolicy.parseMaskRulesReporting(
+                        from: OPA.DecisionLogMaskDropPolicy.decisionValue(from: maskResult))
+                    guard parsed.malformed == 0 else {
+                        self.logger.error(
+                            "decision log \(decisionID) dropped: \(parsed.malformed) malformed mask rule(s)")
+                        return  // fail closed
+                    }
+                    OPA.DecisionLogMaskDropPolicy.apply(rules: parsed.rules, to: &event)
+                case .failed:
+                    self.logger.error("decision log \(decisionID) dropped: mask policy failed")
+                    return  // fail closed
+                }
+            }
+        }
+
+        // Console logging: inline and independent of the service logger.
+        if dlConfig.consoleLogs {
+            OPA.ConsoleDecisionLogger.emit(event, using: self.logger)
+        }
+
+        // Hand off to the service-backed logger, if one is active.
+        if let activeLogger {
+            await activeLogger.log(event)
+        }
+    }
+
+    /// Whether `query` is undefined at the given bundle generation, so
+    /// `logDecision` can skip evaluating a mask/drop policy that isn't present.
+    private func isPolicyKnownUndefined(_ query: String, bundleGen: UInt64) -> Bool {
+        state.withLock { $0.undefinedPolicyQueries[query] == bundleGen }
+    }
+
+    /// Outcome of evaluating a drop/mask policy entrypoint.
+    private enum DropMaskPolicyOutcome {
+        /// The entrypoint is not defined by any of the loaded bundles (no policy).
+        case absent
+        /// The entrypoint evaluated to this result set.
+        case defined(Rego.ResultSet)
+        /// Preparing or evaluating the entrypoint failed. Callers should
+        /// fail-closed and drop the event.
+        case failed
+    }
+
+    /// Evaluates a drop/mask policy entrypoint with the precomputed policy
+    /// `input`. Returns:
+    /// - ``DropMaskPolicyOutcome/absent`` when the entrypoint is not defined by any of the loaded bundles.
+    /// - ``DropMaskPolicyOutcome/defined(_:)`` on a successful evaluation.
+    /// - ``DropMaskPolicyOutcome/failed`` on a prepare/eval error so the caller can fail closed.
+    private func evaluatePolicy(
+        query: String, input: AST.RegoValue, bundleGen: UInt64
+    ) async -> DropMaskPolicyOutcome {
+        let pq: OPA.Engine.PreparedQuery?
+        if let cached = cachedPreparedQuery(for: query) {
+            pq = cached
+        } else {
+            // Register + prepare on first use so masking is available even
+            // before the entrypoint has been prepared alongside other queries.
+            do {
+                pq = try await prepare(adhocQueries: [query])[query]
+            } catch {
+                self.logger.error("decision log policy \(query) preparation failed: \(error)")
+                return .failed
+            }
+        }
+        guard let pq else { return .failed }
+
+        do {
+            return .defined(try await pq.evaluate(input: input))
+        } catch let error as RegoError where error.code == .unknownQuery {
+            // The entrypoint isn't present in the bundle. Remember that for this
+            // bundle generation so we stop re-evaluating it every decision.
+            state.withLock { $0.undefinedPolicyQueries[query] = bundleGen }
+            return .absent
+        } catch {
+            // Transient/other evaluation error on a policy that exists. Fail
+            // closed: the caller must drop the event.
+            self.logger.error("decision log policy \(query) evaluation failed: \(error)")
+            return .failed
+        }
+    }
+
+    /// Snapshots the active bundles' revisions, keyed by bundle name. Nil when
+    /// no bundles are loaded.
+    private func bundleRevisions() -> [String: OPA.DecisionLogEvent.BundleInfo]? {
+        let bundles = self.bundles
+        guard !bundles.isEmpty else { return nil }
+        var out: [String: OPA.DecisionLogEvent.BundleInfo] = Dictionary(
+            minimumCapacity: bundles.count)
+        for (name, bundle) in bundles {
+            out[name] = .init(revision: bundle.manifest.revision)
+        }
+        return out
+    }
+
+    /// Encodes a decision event to the `AST.RegoValue` a drop/mask policy
+    /// receives as its `input` document (OPA's `EventV1` JSON shape).
+    private static func policyInput(from event: OPA.DecisionLogEvent) throws -> AST.RegoValue {
+        let data = try policyInputEncoder.encode(event)
+        return try AST.RegoValue(jsonData: data)
+    }
+
+    private static let policyInputEncoder: JSONEncoder = {
+        let e = JSONEncoder()
+        e.dateEncodingStrategy = .iso8601
+        return e
+    }()
+
+    /// Rebuilds the decision logger for a new config generation. This shifts
+    /// any queued events on the old logger over to the new logger, and returns
+    /// a task running the new logger's `run()` loop. The caller passes the
+    /// resolved `decision_logs` config (nil disables logging) and the previous
+    /// generation's task as `previous`. The old task is cancelled here after
+    /// its buffer of log events is drained.
+    ///
+    /// The outgoing logger is drained *before* cancellation so its shutdown
+    /// `finalDrain` doesn't re-upload events we're handing to the replacement.
+    func hotSwapDecisionLogger(
+        resolved: OPA.DecisionLogsConfig?,
+        config: OPA.Config,
+        previous: Task<Void, Never>?
+    ) async -> Task<Void, Never>? {
+        let carried: [OPA.DecisionLogEvent]
+        if let old = self.state.withLock({ $0.decisionLogger }) {
+            carried = await old.drain()
+        } else {
+            carried = []
+        }
+        previous?.cancel()
+        await previous?.value
+
+        guard let resolved else {
+            if !carried.isEmpty {
+                self.logger.warning(
+                    "decision logging inactive for this config. \(carried.count) buffered event(s) dropped")
+            }
+            self.state.withLock { $0.decisionLogger = nil }
+            return nil
+        }
+
+        // Register the drop/mask entrypoints so they're prepared and cached
+        // alongside decision queries (idempotent after the first generation).
+        var policyQueries: [String] = []
+        if let q = OPA.DecisionLogMaskDropPolicy.configPathToQuery(resolved.maskDecision) { policyQueries.append(q) }
+        if let q = OPA.DecisionLogMaskDropPolicy.configPathToQuery(resolved.dropDecision) { policyQueries.append(q) }
+        if !policyQueries.isEmpty { self.addQueries(policyQueries) }
+
+        let newLogger: (any OPA.DecisionLogger)?
+        do {
+            newLogger = try self.getDecisionLogger(
+                resolved: resolved, config: config, startingEvents: carried)
+        } catch {
+            self.logger.error("Failed to build decision logger: \(error)")
+            if !carried.isEmpty {
+                self.logger.warning(
+                    "decision logger failed to build. \(carried.count) buffered event(s) dropped")
+            }
+            self.state.withLock { $0.decisionLogger = nil }
+            return nil
+        }
+
+        self.state.withLock { $0.decisionLogger = newLogger }
+
+        guard let newLogger else {
+            // Console-only (or no compatible logger): nothing to run. Any events
+            // drained from a service-backed predecessor can't be uploaded here.
+            if !carried.isEmpty {
+                self.logger.warning(
+                    "decision logger reconfigured with no upload service. \(carried.count) buffered event(s) dropped")
+            }
+            return nil
+        }
+        return Task { await newLogger.run() }
     }
 }
 
@@ -490,6 +829,9 @@ extension OPA.Runtime {
     ///  - A **bundle work group managing task** that consumes configs from
     ///    the stream and (re)spawns bundle polling tasks for configured
     ///    bundle resources.
+    ///  - A **decision-logger driver task** that consumes configs from a
+    ///    fan-out stream and hot-swaps the active decision logger per config
+    ///    generation, carrying buffered events across losslessly.
     ///
     /// The initial active config is always emitted to bootstrap bundle
     /// workers, even if no config provider is present.
@@ -514,15 +856,22 @@ extension OPA.Runtime {
 
         try await withThrowingTaskGroup(of: Void.self) { group in
             let (configStream, configContinuation) = AsyncStream<OPA.Config>.makeStream()
+            // A second fan-out of the same config generations, consumed by the
+            // decision-logger driver. `AsyncStream` is single-consumer, so the
+            // driver gets its own stream rather than competing with the bundle
+            // manager for the primary one.
+            let (dlConfigStream, dlConfigContinuation) = AsyncStream<OPA.Config>.makeStream()
 
             // Route each config update from the provider into Runtime state,
-            // forwarding the config to the bundle manager only when it actually
-            // changed. Only successful, changed configs reach the stream.
+            // forwarding the config to the bundle manager and decision-logger
+            // driver only when it actually changed. Only successful, changed
+            // configs reach the streams.
             let configSink: OPA.ConfigUpdateSink = { update in
                 switch update {
                 case .updated(let config):
                     if self.updateConfig(result: .success(config)) {
                         configContinuation.yield(config)
+                        dlConfigContinuation.yield(config)
                     }
                 case .failed(let error):
                     self.logger.error("Config provider load() failed: \(error)")
@@ -530,9 +879,11 @@ extension OPA.Runtime {
                 }
             }
 
-            // Emit the initial config first so it is unambiguously the bundle
-            // manager's first input, before any config the provider may produce.
+            // Emit the initial config first so it is unambiguously the first
+            // input to both the bundle manager and the decision-logger driver,
+            // before any config the provider may produce.
             configContinuation.yield(initialConfig)
+            dlConfigContinuation.yield(initialConfig)
 
             // Start the config provider (e.g., discovery) if present. The
             // provider owns its own polling state machine via run(into:).
@@ -541,12 +892,47 @@ extension OPA.Runtime {
                 group.addTask {
                     await provider.run(into: configSink)
                     configContinuation.finish()
+                    dlConfigContinuation.finish()
                     self.logger.info("Stopping config provider.")
                 }
             } else {
-                // No more configs coming — finish the stream so the bundle
-                // manager settles into steady state after the initial config.
+                // No more configs coming — finish the streams so the bundle
+                // manager and decision-logger driver settle into steady state
+                // after the initial config.
                 configContinuation.finish()
+                dlConfigContinuation.finish()
+            }
+
+            // Decision-logger driver: hot-swaps the active decision logger for
+            // each config generation, carrying buffered events across losslessly.
+            // Kept as its own task (parallel to the bundle manager) since the
+            // refactored bundle manager owns its config loop internally.
+            group.addTask {
+                var currentLoggerTask: Task<Void, Never>? = nil
+                for await config in dlConfigStream {
+                    // Resolve this generation's decision-logs config once. An
+                    // invalid section disables logging for this generation.
+                    let resolvedDL: OPA.DecisionLogsConfig?
+                    do {
+                        resolvedDL = try Self.resolveDecisionLogsConfig(config)
+                    } catch {
+                        self.logger.error(
+                            "Invalid decision_logs config, disabling decision logging: \(error)")
+                        resolvedDL = nil
+                    }
+                    // Hot-swap the decision logger for this config generation,
+                    // carrying buffered events across losslessly.
+                    currentLoggerTask = await self.hotSwapDecisionLogger(
+                        resolved: resolvedDL, config: config, previous: currentLoggerTask)
+                }
+                // The config stream ended (e.g. no config provider). Keep the
+                // decision logger alive until this task is cancelled.
+                let loggerToAwait = currentLoggerTask
+                await withTaskCancellationHandler {
+                    await loggerToAwait?.value
+                } onCancel: {
+                    loggerToAwait?.cancel()
+                }
             }
 
             // Bundle manager: reconciles bundle loaders against each config,
@@ -560,6 +946,15 @@ extension OPA.Runtime {
                 httpClientCache: self.httpClientCache,
                 sink: bundleSink,
                 onRemoved: { names in self.pruneBundles(names) },
+                additionalRetainedServices: { config in
+                    // Keep the decision-log upload service's HTTP client warm
+                    // across reloads, alongside the bundle/discovery clients.
+                    // Its service name is the uploader's cache key.
+                    guard let resolved = try? Self.resolveDecisionLogsConfig(config),
+                        !resolved.service.isEmpty
+                    else { return [] }
+                    return [resolved.service]
+                },
                 logger: self.logger)
             group.addTask {
                 await manager.run(configs: configStream)
@@ -699,7 +1094,7 @@ extension OPA.Runtime {
     /// Initializes a Runtime with separate async-only and synchronous builtin dictionaries,
     /// mirroring the typed parameter style used by ``OPA/Engine``.
     ///
-    /// Prefer the ``init(config:queries:instanceID:headers:httpClientConfig:bundleLoaders:configProvider:customBuiltins:logger:)``
+    /// Prefer the ``init(config:queries:instanceID:headers:httpClientConfig:bundleLoaders:decisionLoggers:configProvider:customBuiltins:logger:)``
     /// overload that accepts ``Rego/BuiltinImpl`` values when possible — it carries sync/async
     /// intent in the type and avoids an extra merge step. Use this overload when you already hold
     /// typed dictionaries and don't want to convert them manually.
@@ -717,6 +1112,7 @@ extension OPA.Runtime {
             OPA.DiskBasedBundleLoader.self,
             OPA.RESTClientBundleLoader.self,
         ],
+        decisionLoggers: [OPA.DecisionLogger.Type] = [OPA.BufferedDecisionLogger.self],
         configProvider: (any OPA.ConfigProvider)? = nil,
         customAsyncBuiltins: [String: Rego.AsyncBuiltin] = [:],
         customSyncBuiltins: [String: Rego.SyncBuiltin] = [:],
@@ -733,6 +1129,7 @@ extension OPA.Runtime {
             headers: headers,
             httpClientConfig: httpClientConfig,
             bundleLoaders: bundleLoaders,
+            decisionLoggers: decisionLoggers,
             configProvider: configProvider,
             customBuiltins: combined,
             logger: logger)
